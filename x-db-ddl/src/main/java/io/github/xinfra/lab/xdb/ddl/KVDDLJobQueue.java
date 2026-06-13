@@ -40,17 +40,25 @@ public class KVDDLJobQueue implements DDLJobQueue {
         List<byte[][]> scan(byte[] start, byte[] end, int limit);
     }
 
+    @FunctionalInterface
+    public interface KVCas {
+        boolean cas(byte[] key, byte[] expected, byte[] newValue);
+    }
+
     private final KVGetter getter;
     private final KVPutter putter;
     private final KVDeleter deleter;
     private final KVScanner scanner;
+    private final KVCas cas;
     private final ObjectMapper objectMapper;
 
-    public KVDDLJobQueue(KVGetter getter, KVPutter putter, KVDeleter deleter, KVScanner scanner) {
+    public KVDDLJobQueue(KVGetter getter, KVPutter putter, KVDeleter deleter,
+                         KVScanner scanner, KVCas cas) {
         this.getter = getter;
         this.putter = putter;
         this.deleter = deleter;
         this.scanner = scanner;
+        this.cas = cas;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -160,19 +168,16 @@ public class KVDDLJobQueue implements DDLJobQueue {
     @Override
     public long allocJobId() {
         byte[] key = DDL_JOB_ID_ALLOC_KEY.getBytes(StandardCharsets.UTF_8);
-        byte[] value = getter.get(key);
-
-        long nextId;
-        if (value == null) {
-            nextId = 1;
-        } else {
-            nextId = ByteBuffer.wrap(value).getLong() + 1;
+        while (true) {
+            byte[] value = getter.get(key);
+            long current = (value != null && value.length > 0)
+                    ? ByteBuffer.wrap(value).getLong() : 0;
+            long next = current + 1;
+            byte[] newValue = ByteBuffer.allocate(Long.BYTES).putLong(next).array();
+            if (cas.cas(key, value, newValue)) {
+                return next;
+            }
         }
-
-        byte[] newValue = ByteBuffer.allocate(Long.BYTES).putLong(nextId).array();
-        putter.put(key, newValue);
-
-        return nextId;
     }
 
     private byte[] serializeJob(DDLJob job) {

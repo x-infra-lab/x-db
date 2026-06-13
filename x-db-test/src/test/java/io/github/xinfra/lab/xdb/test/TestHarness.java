@@ -200,6 +200,7 @@ public class TestHarness implements AutoCloseable {
             Map<Long, TableInfo> m = tables.get(dbId);
             return m != null ? new ArrayList<>(m.keySet()) : new ArrayList<>();
         }
+        @Override public long advanceSchemaVersion() { return ++schemaVersion; }
         @Override public long allocAutoIncId(long tableId, int batchSize) {
             return autoIncIds.computeIfAbsent(tableId, k -> new AtomicLong(0)).addAndGet(batchSize);
         }

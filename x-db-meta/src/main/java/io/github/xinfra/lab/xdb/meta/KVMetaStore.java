@@ -34,15 +34,22 @@ public class KVMetaStore implements MetaStore {
         void delete(byte[] key);
     }
 
+    @FunctionalInterface
+    public interface KVCas {
+        boolean cas(byte[] key, byte[] expected, byte[] newValue);
+    }
+
     private final KVGetter getter;
     private final KVPutter putter;
     private final KVDeleter deleter;
+    private final KVCas cas;
     private final ObjectMapper objectMapper;
 
-    public KVMetaStore(KVGetter getter, KVPutter putter, KVDeleter deleter) {
+    public KVMetaStore(KVGetter getter, KVPutter putter, KVDeleter deleter, KVCas cas) {
         this.getter = getter;
         this.putter = putter;
         this.deleter = deleter;
+        this.cas = cas;
         this.objectMapper = new ObjectMapper();
         this.objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
@@ -159,33 +166,51 @@ public class KVMetaStore implements MetaStore {
     }
 
     @Override
+    public long advanceSchemaVersion() {
+        byte[] key = MetaCodec.schemaVersionKey();
+        while (true) {
+            byte[] value = getter.get(key);
+            long current = (value != null && value.length > 0)
+                    ? ByteBuffer.wrap(value).getLong() : 0;
+            long next = current + 1;
+            byte[] newValue = new byte[8];
+            ByteBuffer.wrap(newValue).putLong(next);
+            if (cas.cas(key, value, newValue)) {
+                return next;
+            }
+        }
+    }
+
+    @Override
     public long allocAutoIncId(long tableId, int batchSize) {
         byte[] key = MetaCodec.autoIncKey(tableId);
-        byte[] value = getter.get(key);
-        long current = 0;
-        if (value != null && value.length > 0) {
-            current = ByteBuffer.wrap(value).getLong();
+        while (true) {
+            byte[] value = getter.get(key);
+            long current = (value != null && value.length > 0)
+                    ? ByteBuffer.wrap(value).getLong() : 0;
+            long newBase = current + batchSize;
+            byte[] newValue = new byte[8];
+            ByteBuffer.wrap(newValue).putLong(newBase);
+            if (cas.cas(key, value, newValue)) {
+                return current;
+            }
         }
-        long newBase = current + batchSize;
-        byte[] newValue = new byte[8];
-        ByteBuffer.wrap(newValue).putLong(newBase);
-        putter.put(key, newValue);
-        return current;
     }
 
     @Override
     public long allocGlobalId() {
         byte[] key = MetaCodec.globalIdKey();
-        byte[] value = getter.get(key);
-        long current = 0;
-        if (value != null && value.length > 0) {
-            current = ByteBuffer.wrap(value).getLong();
+        while (true) {
+            byte[] value = getter.get(key);
+            long current = (value != null && value.length > 0)
+                    ? ByteBuffer.wrap(value).getLong() : 0;
+            long next = current + 1;
+            byte[] newValue = new byte[8];
+            ByteBuffer.wrap(newValue).putLong(next);
+            if (cas.cas(key, value, newValue)) {
+                return next;
+            }
         }
-        long next = current + 1;
-        byte[] newValue = new byte[8];
-        ByteBuffer.wrap(newValue).putLong(next);
-        putter.put(key, newValue);
-        return next;
     }
 
     // --- JSON helpers ---

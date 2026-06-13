@@ -288,6 +288,7 @@ class MySQLProtocolTest {
         @Override public void dropTable(long dbId, long tId) { var m = tables.get(dbId); if (m != null) m.remove(tId); }
         @Override public TableInfo getTable(long dbId, long tId) { var m = tables.get(dbId); return m != null ? m.get(tId) : null; }
         @Override public java.util.List<Long> listTableIds(long dbId) { var m = tables.get(dbId); return m != null ? new ArrayList<>(m.keySet()) : new ArrayList<>(); }
+        @Override public long advanceSchemaVersion() { return ++schemaVersion; }
         @Override public long allocAutoIncId(long tableId, int batch) { return autoIncIds.computeIfAbsent(tableId, k -> new AtomicLong(0)).addAndGet(batch); }
         @Override public long allocGlobalId() { return globalIdGen.incrementAndGet(); }
     }

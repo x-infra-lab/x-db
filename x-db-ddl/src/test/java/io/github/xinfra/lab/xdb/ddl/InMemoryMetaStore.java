@@ -84,6 +84,11 @@ public class InMemoryMetaStore implements MetaStore {
     }
 
     @Override
+    public long advanceSchemaVersion() {
+        return ++schemaVersion;
+    }
+
+    @Override
     public long allocAutoIncId(long tableId, int batchSize) {
         return autoIncIds.computeIfAbsent(tableId, k -> new AtomicLong(0))
                 .addAndGet(batchSize);

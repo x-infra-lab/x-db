@@ -167,7 +167,9 @@ class FullStackE2ETest {
         KVMetaStore metaStore = new KVMetaStore(
                 key -> rawKv.get(key).orElse(null),
                 rawKv::put,
-                rawKv::delete
+                rawKv::delete,
+                (key, expected, newVal) ->
+                        rawKv.cas(key, Optional.ofNullable(expected), newVal).succeeded()
         );
 
         InfoSchemaHolder schemaHolder = new InfoSchemaHolder(metaStore);
@@ -178,7 +180,9 @@ class FullStackE2ETest {
                 rawKv::delete,
                 (start, end, limit) -> rawKv.scan(start, end, limit).stream()
                         .map(kp -> new byte[][]{kp.key(), kp.value()})
-                        .toList()
+                        .toList(),
+                (key, expected, newVal) ->
+                        rawKv.cas(key, Optional.ofNullable(expected), newVal).succeeded()
         );
 
         DDLOwnerManager ownerManager = new DDLOwnerManager(

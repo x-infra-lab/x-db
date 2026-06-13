@@ -11,12 +11,7 @@ public interface MetaStore {
 
     void setSchemaVersion(long version);
 
-    default long advanceSchemaVersion() {
-        long current = getSchemaVersion();
-        long next = current + 1;
-        setSchemaVersion(next);
-        return next;
-    }
+    long advanceSchemaVersion();
 
     default void truncateTable(long dbId, long tableId) {
         dropTable(dbId, tableId);
