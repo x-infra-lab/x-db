@@ -1,0 +1,55 @@
+package io.github.xinfra.lab.xdb.planner.physical;
+
+import io.github.xinfra.lab.xdb.expression.Expression;
+import io.github.xinfra.lab.xdb.meta.ColumnInfo;
+import io.github.xinfra.lab.xdb.meta.TableInfo;
+
+import java.util.Collections;
+import java.util.List;
+
+public class PhysicalTableScan implements PhysicalPlan {
+    private final TableInfo table;
+    private final String alias;
+    private final List<ColumnInfo> outputColumns;
+    private final List<Expression> accessConditions;
+    private long estimatedRows;
+    private boolean keepOrder;
+
+    public PhysicalTableScan(TableInfo table, String alias,
+                             List<ColumnInfo> outputColumns, List<Expression> accessConditions) {
+        this.table = table;
+        this.alias = alias;
+        this.outputColumns = outputColumns;
+        this.accessConditions = accessConditions;
+        this.estimatedRows = 10000;
+    }
+
+    public TableInfo table() { return table; }
+    public String alias() { return alias; }
+    public List<Expression> accessConditions() { return accessConditions; }
+    public boolean keepOrder() { return keepOrder; }
+    public void setKeepOrder(boolean keepOrder) { this.keepOrder = keepOrder; }
+    public void setEstimatedRows(long rows) { this.estimatedRows = rows; }
+
+    @Override
+    public List<PhysicalPlan> children() { return Collections.emptyList(); }
+
+    @Override
+    public List<ColumnInfo> outputSchema() { return outputColumns; }
+
+    @Override
+    public double estimatedCost() { return estimatedRows * 2.0; }
+
+    @Override
+    public long estimatedRowCount() { return estimatedRows; }
+
+    @Override
+    public String explain(int indent) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(indentStr(indent)).append("PhysicalTableScan(").append(table.getName());
+        if (alias != null) sb.append(" AS ").append(alias);
+        sb.append(", rows=").append(estimatedRows).append(")");
+        if (!accessConditions.isEmpty()) sb.append(" cond=").append(accessConditions);
+        return sb.toString();
+    }
+}

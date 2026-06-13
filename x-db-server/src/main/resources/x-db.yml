@@ -1,0 +1,4 @@
+port: 4000
+pdAddresses: "127.0.0.1:2379"
+workerThreads: 0
+maxConnections: 1000
