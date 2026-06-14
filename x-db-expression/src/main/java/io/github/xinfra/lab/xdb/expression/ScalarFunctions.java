@@ -1,5 +1,7 @@
 package io.github.xinfra.lab.xdb.expression;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 
 public final class ScalarFunctions {
@@ -27,9 +29,18 @@ public final class ScalarFunctions {
             case "SUBSTRING", "SUBSTR", "MID" -> {
                 if (args.size() < 2 || args.get(0).isNull()) yield Datum.nil();
                 String s = args.get(0).toStringValue();
-                int start = Math.max(0, (int) args.get(1).toLong() - 1);
-                if (start >= s.length()) yield Datum.of("");
+                int pos = (int) args.get(1).toLong();
+                int start;
+                if (pos > 0) {
+                    start = pos - 1;
+                } else if (pos < 0) {
+                    start = s.length() + pos;
+                } else {
+                    yield Datum.of("");
+                }
+                if (start < 0 || start >= s.length()) yield Datum.of("");
                 int len = args.size() >= 3 ? (int) args.get(2).toLong() : s.length() - start;
+                if (len <= 0) yield Datum.of("");
                 yield Datum.of(s.substring(start, Math.min(start + len, s.length())));
             }
             case "REPLACE" -> {
@@ -48,7 +59,11 @@ public final class ScalarFunctions {
                 yield Datum.of(s.substring(Math.max(0, s.length() - (int) args.get(1).toLong())));
             }
             case "ABS" -> nullSafe1(args, d -> {
-                if (d instanceof Datum.IntDatum i) return Datum.of(Math.abs(i.value()));
+                if (d instanceof Datum.IntDatum i) {
+                    long v = i.value();
+                    if (v == Long.MIN_VALUE) return Datum.of(-(double) v);
+                    return Datum.of(Math.abs(v));
+                }
                 return Datum.of(Math.abs(d.toDouble()));
             });
             case "CEIL", "CEILING" -> nullSafe1(args, d -> Datum.of((long) Math.ceil(d.toDouble())));
@@ -57,8 +72,8 @@ public final class ScalarFunctions {
                 if (args.isEmpty() || args.get(0).isNull()) yield Datum.nil();
                 double v = args.get(0).toDouble();
                 int scale = args.size() >= 2 ? (int) args.get(1).toLong() : 0;
-                double factor = Math.pow(10, scale);
-                yield Datum.of(Math.round(v * factor) / factor);
+                BigDecimal bd = BigDecimal.valueOf(v).setScale(scale, RoundingMode.HALF_UP);
+                yield scale == 0 ? Datum.of(bd.longValue()) : Datum.of(bd.doubleValue());
             }
             case "MOD" -> {
                 if (args.size() < 2 || args.get(0).isNull() || args.get(1).isNull()) yield Datum.nil();

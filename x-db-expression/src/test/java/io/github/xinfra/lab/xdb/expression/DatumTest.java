@@ -238,7 +238,16 @@ class DatumTest {
         void otherTypesAreTrue() {
             assertThat(Datum.of(new byte[]{1}).toBoolean()).isTrue();
             assertThat(Datum.of(LocalDateTime.now()).toBoolean()).isTrue();
-            assertThat(Datum.of(BigDecimal.ZERO).toBoolean()).isTrue();
+        }
+
+        @Test
+        void decimalZeroIsFalse() {
+            assertThat(Datum.of(BigDecimal.ZERO).toBoolean()).isFalse();
+        }
+
+        @Test
+        void decimalNonZeroIsTrue() {
+            assertThat(Datum.of(BigDecimal.ONE).toBoolean()).isTrue();
         }
     }
 

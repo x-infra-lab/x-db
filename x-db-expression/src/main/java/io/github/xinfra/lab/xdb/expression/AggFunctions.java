@@ -2,6 +2,8 @@ package io.github.xinfra.lab.xdb.expression;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class AggFunctions {
     private AggFunctions() {}
@@ -21,13 +23,21 @@ public final class AggFunctions {
         private final Expression arg;
         private final boolean distinct;
         private long count;
+        private final Set<String> seen;
 
-        CountAgg(Expression arg, boolean distinct) { this.arg = arg; this.distinct = distinct; }
+        CountAgg(Expression arg, boolean distinct) {
+            this.arg = arg; this.distinct = distinct;
+            this.seen = distinct ? new HashSet<>() : null;
+        }
 
         @Override public Type type() { return Type.COUNT; }
         @Override public Expression arg() { return arg; }
         @Override public boolean distinct() { return distinct; }
-        @Override public void update(Datum value) { if (!value.isNull()) count++; }
+        @Override public void update(Datum value) {
+            if (value.isNull()) return;
+            if (distinct && !seen.add(value.toStringValue())) return;
+            count++;
+        }
         @Override public void merge(AggFunction other) { count += ((CountAgg) other).count; }
         @Override public Datum result() { return Datum.of(count); }
         @Override public AggFunction newInstance() { return new CountAgg(arg, distinct); }
@@ -39,14 +49,19 @@ public final class AggFunctions {
         private final boolean distinct;
         private BigDecimal sum = BigDecimal.ZERO;
         private boolean hasValue;
+        private final Set<String> seen;
 
-        SumAgg(Expression arg, boolean distinct) { this.arg = arg; this.distinct = distinct; }
+        SumAgg(Expression arg, boolean distinct) {
+            this.arg = arg; this.distinct = distinct;
+            this.seen = distinct ? new HashSet<>() : null;
+        }
 
         @Override public Type type() { return Type.SUM; }
         @Override public Expression arg() { return arg; }
         @Override public boolean distinct() { return distinct; }
         @Override public void update(Datum value) {
             if (value.isNull()) return;
+            if (distinct && !seen.add(value.toStringValue())) return;
             hasValue = true;
             if (value instanceof Datum.IntDatum i) sum = sum.add(BigDecimal.valueOf(i.value()));
             else if (value instanceof Datum.DecimalDatum d) sum = sum.add(d.value());
@@ -66,14 +81,19 @@ public final class AggFunctions {
         private final boolean distinct;
         private BigDecimal sum = BigDecimal.ZERO;
         private long count;
+        private final Set<String> seen;
 
-        AvgAgg(Expression arg, boolean distinct) { this.arg = arg; this.distinct = distinct; }
+        AvgAgg(Expression arg, boolean distinct) {
+            this.arg = arg; this.distinct = distinct;
+            this.seen = distinct ? new HashSet<>() : null;
+        }
 
         @Override public Type type() { return Type.AVG; }
         @Override public Expression arg() { return arg; }
         @Override public boolean distinct() { return distinct; }
         @Override public void update(Datum value) {
             if (value.isNull()) return;
+            if (distinct && !seen.add(value.toStringValue())) return;
             count++;
             if (value instanceof Datum.IntDatum i) sum = sum.add(BigDecimal.valueOf(i.value()));
             else if (value instanceof Datum.DecimalDatum d) sum = sum.add(d.value());

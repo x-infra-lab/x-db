@@ -52,6 +52,7 @@ import java.util.List;
 public class SessionImpl implements Session {
 
     private static final Logger log = LoggerFactory.getLogger(SessionImpl.class);
+    private static final int MAX_RESULT_ROWS = 1_000_000;
 
     private final long id;
     private final SessionVariable variables;
@@ -440,6 +441,9 @@ public class SessionImpl implements Session {
         Row row;
         while ((row = executor.next()) != null) {
             rows.add(row);
+            if (rows.size() >= MAX_RESULT_ROWS) {
+                throw new RuntimeException("Result set too large (exceeds " + MAX_RESULT_ROWS + " rows)");
+            }
         }
 
         return ExecuteResult.query(columns, rows);

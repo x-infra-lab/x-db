@@ -13,9 +13,12 @@ import io.github.xinfra.lab.xdb.meta.TableInfo;
 import io.github.xinfra.lab.xdb.table.RowCodec;
 import io.github.xinfra.lab.xdb.table.TableCodec;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Inserts rows into the KV store.
@@ -96,6 +99,10 @@ public class InsertExecutor implements Executor {
             }
 
             byte[] rowValue = RowCodec.encode(colIds, colValues);
+            byte[] existing = txnCtx.getter().get(rowKey);
+            if (existing != null) {
+                throw XDBException.dupEntry(String.valueOf(handle), "PRIMARY");
+            }
             txnCtx.putter().put(rowKey, rowValue);
 
             // Insert index entries
@@ -186,7 +193,12 @@ public class InsertExecutor implements Executor {
             if (index.isUnique()) {
                 indexKey = TableCodec.encodeIndexKey(table.getId(), index.getId(),
                         indexValues, null);
-                // Store handle in the value for unique index
+                byte[] existingIdx = txnCtx.getter().get(indexKey);
+                if (existingIdx != null) {
+                    throw XDBException.dupEntry(
+                            indexValues.stream().map(Datum::toStringValue).reduce((a, b) -> a + "-" + b).orElse(""),
+                            index.getName());
+                }
                 indexValue = io.github.xinfra.lab.xdb.table.DatumCodec.encode(Datum.of(handle));
             } else {
                 // Non-unique: append handle to key

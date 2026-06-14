@@ -36,8 +36,20 @@ public class ColumnPruningRule implements OptimizeRule {
             sel.setChild(prune(sel.child(), childRequired));
             return sel;
         }
-        if (plan instanceof LogicalTableScan) {
-            return plan;
+        if (plan instanceof LogicalTableScan scan) {
+            Set<String> allRequired = new HashSet<>(required);
+            for (Expression expr : scan.accessConditions()) {
+                collectColumnsFromExpr(expr, allRequired);
+            }
+            if (!allRequired.isEmpty()) {
+                List<ColumnInfo> pruned = scan.outputSchema().stream()
+                        .filter(c -> allRequired.contains(c.getName().toLowerCase()))
+                        .collect(Collectors.toList());
+                if (!pruned.isEmpty()) {
+                    scan.setOutputColumns(pruned);
+                }
+            }
+            return scan;
         }
         if (plan instanceof LogicalSort sort) {
             Set<String> childRequired = new HashSet<>(required);
@@ -92,6 +104,15 @@ public class ColumnPruningRule implements OptimizeRule {
     private void collectColumnsFromExpr(Expression expr, Set<String> columns) {
         if (expr instanceof ColumnRef ref) {
             columns.add(ref.columnName().toLowerCase());
+        } else if (expr instanceof io.github.xinfra.lab.xdb.expression.BinaryOp op) {
+            collectColumnsFromExpr(op.left(), columns);
+            collectColumnsFromExpr(op.right(), columns);
+        } else if (expr instanceof io.github.xinfra.lab.xdb.expression.UnaryOp uop) {
+            collectColumnsFromExpr(uop.operand(), columns);
+        } else if (expr instanceof io.github.xinfra.lab.xdb.expression.FunctionCallExpr func) {
+            for (Expression arg : func.args()) {
+                collectColumnsFromExpr(arg, columns);
+            }
         }
     }
 }

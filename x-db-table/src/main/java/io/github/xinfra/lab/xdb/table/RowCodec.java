@@ -93,7 +93,7 @@ public final class RowCodec {
                 out.write(raw, 0, raw.length);
             }
             case Datum.BytesDatum d -> {
-                out.write(Codec.COMPACT_BYTES_FLAG);
+                out.write(Codec.BYTES_DATUM_FLAG);
                 byte[] lenB = Codec.encodeVarint(d.value().length);
                 out.write(lenB, 0, lenB.length);
                 out.write(d.value(), 0, d.value().length);
@@ -140,6 +140,15 @@ public final class RowCodec {
                 System.arraycopy(data, pos, raw, 0, (int) len);
                 bytesRead[0] = 1 + innerRead[0] + (int) len;
                 yield Datum.of(new String(raw, StandardCharsets.UTF_8));
+            }
+            case Codec.BYTES_DATUM_FLAG -> {
+                int[] innerRead = new int[1];
+                long len = Codec.decodeVarint(data, pos, innerRead);
+                pos += innerRead[0];
+                byte[] raw = new byte[(int) len];
+                System.arraycopy(data, pos, raw, 0, (int) len);
+                bytesRead[0] = 1 + innerRead[0] + (int) len;
+                yield Datum.of(raw);
             }
             case Codec.DECIMAL_FLAG -> {
                 int[] innerRead = new int[1];

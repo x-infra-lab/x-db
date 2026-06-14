@@ -35,7 +35,7 @@ public class HashJoinExecutor implements Executor {
     private final int probeColCount;
 
     // Build hash table: key -> list of build rows
-    private Map<String, List<Row>> hashTable;
+    private Map<List<Datum>, List<Row>> hashTable;
     // Track which build rows have been matched (for LEFT join)
     private Set<Integer> matchedBuildIndices;
     private List<Row> allBuildRows;
@@ -80,7 +80,7 @@ public class HashJoinExecutor implements Executor {
         int index = 0;
         while ((buildRow = buildSide.next()) != null) {
             allBuildRows.add(buildRow);
-            String key = computeKey(buildRow, buildKeys);
+            List<Datum> key = computeKey(buildRow, buildKeys);
             hashTable.computeIfAbsent(key, k -> new ArrayList<>()).add(buildRow);
             index++;
         }
@@ -143,7 +143,7 @@ public class HashJoinExecutor implements Executor {
             }
 
             // Probe the hash table
-            String probeKey = computeKey(currentProbeRow, probeKeys);
+            List<Datum> probeKey = computeKey(currentProbeRow, probeKeys);
             currentMatches = hashTable.get(probeKey);
             matchIndex = 0;
 
@@ -181,14 +181,12 @@ public class HashJoinExecutor implements Executor {
         return null;
     }
 
-    private String computeKey(Row row, List<Expression> keyExprs) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < keyExprs.size(); i++) {
-            if (i > 0) sb.append('\0');
-            Datum value = keyExprs.get(i).eval(evalCtx, row);
-            sb.append(value.toStringValue());
+    private List<Datum> computeKey(Row row, List<Expression> keyExprs) {
+        List<Datum> key = new ArrayList<>(keyExprs.size());
+        for (Expression expr : keyExprs) {
+            key.add(expr.eval(evalCtx, row));
         }
-        return sb.toString();
+        return key;
     }
 
     private Row joinRows(Row buildRow, Row probeRow) {

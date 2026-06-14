@@ -27,7 +27,7 @@ public class HashAggExecutor implements Executor {
     private final EvalContext evalCtx;
 
     // group key -> (group key values, aggregate function instances)
-    private Map<String, GroupEntry> groups;
+    private Map<List<Datum>, GroupEntry> groups;
     private Iterator<GroupEntry> resultIterator;
 
     public HashAggExecutor(Executor child, List<Expression> groupByExprs,
@@ -50,7 +50,7 @@ public class HashAggExecutor implements Executor {
         Row row;
         while ((row = child.next()) != null) {
             // Compute group key
-            String groupKey = computeGroupKey(row);
+            List<Datum> groupKey = computeGroupKey(row);
             Datum[] groupKeyValues = evaluateGroupByExprs(row);
 
             GroupEntry entry = groups.get(groupKey);
@@ -85,7 +85,7 @@ public class HashAggExecutor implements Executor {
             for (AggFunction aggFunc : aggFunctions) {
                 emptyAggs.add(aggFunc.newInstance());
             }
-            groups.put("", new GroupEntry(new Datum[0], emptyAggs));
+            groups.put(List.of(), new GroupEntry(new Datum[0], emptyAggs));
         }
 
         resultIterator = groups.values().iterator();
@@ -125,17 +125,15 @@ public class HashAggExecutor implements Executor {
         return outputColumns;
     }
 
-    private String computeGroupKey(Row row) {
+    private List<Datum> computeGroupKey(Row row) {
         if (groupByExprs.isEmpty()) {
-            return "";
+            return List.of();
         }
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < groupByExprs.size(); i++) {
-            if (i > 0) sb.append('\0');
-            Datum value = groupByExprs.get(i).eval(evalCtx, row);
-            sb.append(value.toStringValue());
+        List<Datum> key = new ArrayList<>(groupByExprs.size());
+        for (Expression expr : groupByExprs) {
+            key.add(expr.eval(evalCtx, row));
         }
-        return sb.toString();
+        return key;
     }
 
     private Datum[] evaluateGroupByExprs(Row row) {

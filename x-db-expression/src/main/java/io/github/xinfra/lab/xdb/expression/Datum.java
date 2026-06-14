@@ -88,6 +88,7 @@ public sealed interface Datum permits
         if (this instanceof NullDatum) return false;
         if (this instanceof IntDatum d) return d.value != 0;
         if (this instanceof DoubleDatum d) return d.value != 0.0;
+        if (this instanceof DecimalDatum d) return d.value.signum() != 0;
         if (this instanceof StringDatum d) return !d.value.isEmpty() && !"0".equals(d.value);
         return true;
     }

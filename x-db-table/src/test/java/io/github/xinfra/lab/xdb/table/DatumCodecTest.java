@@ -196,7 +196,7 @@ class DatumCodecTest {
         @Test
         void encodedStartsWithBytesFlag() {
             byte[] encoded = DatumCodec.encode(Datum.of(new byte[]{0x01}));
-            assertThat(encoded[0]).isEqualTo(Codec.BYTES_FLAG);
+            assertThat(encoded[0]).isEqualTo(Codec.BYTES_DATUM_FLAG);
         }
     }
 

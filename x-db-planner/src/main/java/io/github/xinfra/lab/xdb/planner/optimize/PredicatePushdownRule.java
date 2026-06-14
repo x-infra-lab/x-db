@@ -69,11 +69,21 @@ public class PredicatePushdownRule implements OptimizeRule {
                 else if (side == TableSide.RIGHT) rightConds.add(cond);
                 else remaining.add(cond);
             }
+            boolean canPushLeft = join.joinType() != JoinType.RIGHT;
+            boolean canPushRight = join.joinType() != JoinType.LEFT;
             if (!leftConds.isEmpty()) {
-                join.setLeft(pushSelectionDown(leftConds, join.left()));
+                if (canPushLeft) {
+                    join.setLeft(pushSelectionDown(leftConds, join.left()));
+                } else {
+                    remaining.addAll(leftConds);
+                }
             }
             if (!rightConds.isEmpty()) {
-                join.setRight(pushSelectionDown(rightConds, join.right()));
+                if (canPushRight) {
+                    join.setRight(pushSelectionDown(rightConds, join.right()));
+                } else {
+                    remaining.addAll(rightConds);
+                }
             }
             if (!remaining.isEmpty()) {
                 return new LogicalSelection(join, remaining);
@@ -107,19 +117,31 @@ public class PredicatePushdownRule implements OptimizeRule {
         List<String> names = new ArrayList<>();
         if (expr instanceof ColumnRef ref && ref.tableName() != null) {
             names.add(ref.tableName());
-        }
-        if (expr instanceof BinaryOp op) {
+        } else if (expr instanceof BinaryOp op) {
             names.addAll(collectTableNames(op.left()));
             names.addAll(collectTableNames(op.right()));
+        } else if (expr instanceof io.github.xinfra.lab.xdb.expression.UnaryOp uop) {
+            names.addAll(collectTableNames(uop.operand()));
         }
         return names;
     }
 
     private List<ColumnRef> collectColumnRefs(LogicalPlan plan) {
         List<ColumnRef> refs = new ArrayList<>();
-        for (var col : plan.outputSchema()) {
-            ColumnRef ref = new ColumnRef(null, col.getName(), 0, col.getType());
-            refs.add(ref);
+        if (plan instanceof LogicalTableScan scan) {
+            String tblName = scan.tableName();
+            for (var col : scan.outputSchema()) {
+                refs.add(new ColumnRef(tblName, col.getName(), 0, col.getType()));
+            }
+        } else if (plan instanceof LogicalIndexScan scan) {
+            String tblName = scan.alias() != null ? scan.alias() : scan.table().getName();
+            for (var col : scan.outputSchema()) {
+                refs.add(new ColumnRef(tblName, col.getName(), 0, col.getType()));
+            }
+        } else {
+            for (var child : plan.children()) {
+                refs.addAll(collectColumnRefs(child));
+            }
         }
         return refs;
     }

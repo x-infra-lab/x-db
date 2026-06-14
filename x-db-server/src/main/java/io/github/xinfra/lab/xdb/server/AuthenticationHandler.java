@@ -208,9 +208,9 @@ public class AuthenticationHandler extends ChannelInboundHandlerAdapter {
 
         // Swap this handler for the command handler (on a separate thread pool to avoid blocking EventLoop).
         if (queryExecutorGroup != null) {
-            ctx.pipeline().addLast(queryExecutorGroup, "commandHandler", new CommandHandler());
+            ctx.pipeline().addLast(queryExecutorGroup, "commandHandler", new CommandHandler(sessionManager));
         } else {
-            ctx.pipeline().addLast("commandHandler", new CommandHandler());
+            ctx.pipeline().addLast("commandHandler", new CommandHandler(sessionManager));
         }
         ctx.pipeline().remove(this);
     }

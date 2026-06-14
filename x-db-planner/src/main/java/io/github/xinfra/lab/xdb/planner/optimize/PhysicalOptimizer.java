@@ -8,7 +8,9 @@ import io.github.xinfra.lab.xdb.planner.physical.*;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class PhysicalOptimizer {
 
@@ -90,8 +92,18 @@ public class PhysicalOptimizer {
         PhysicalPlan left = convert(join.left());
         PhysicalPlan right = convert(join.right());
         if (left.estimatedRowCount() <= 10000 || right.estimatedRowCount() <= 10000) {
-            PhysicalPlan buildSide = left.estimatedRowCount() <= right.estimatedRowCount() ? left : right;
-            PhysicalPlan probeSide = buildSide == left ? right : left;
+            PhysicalPlan buildSide;
+            PhysicalPlan probeSide;
+            if (join.joinType() == JoinType.LEFT) {
+                buildSide = right;
+                probeSide = left;
+            } else if (join.joinType() == JoinType.RIGHT) {
+                buildSide = left;
+                probeSide = right;
+            } else {
+                buildSide = left.estimatedRowCount() <= right.estimatedRowCount() ? left : right;
+                probeSide = buildSide == left ? right : left;
+            }
             return new PhysicalHashJoin(buildSide, probeSide, join.joinType(),
                     join.condition(), Collections.emptyList(), Collections.emptyList());
         }
@@ -100,12 +112,32 @@ public class PhysicalOptimizer {
 
     private IndexInfo selectBestIndex(TableInfo table, List<Expression> conditions) {
         if (table.getIndices() == null) return null;
+        Set<String> conditionColumns = new HashSet<>();
+        for (Expression cond : conditions) {
+            collectConditionColumns(cond, conditionColumns);
+        }
         for (IndexInfo idx : table.getIndices()) {
             if (idx.isPrimary()) continue;
             if (idx.getState() != null &&
                     idx.getState() != io.github.xinfra.lab.xdb.meta.SchemaState.PUBLIC) continue;
-            return idx;
+            if (idx.getColumns().isEmpty()) continue;
+            long firstColId = idx.getColumns().get(0).getColumnId();
+            io.github.xinfra.lab.xdb.meta.ColumnInfo firstCol = table.getColumn(firstColId);
+            if (firstCol != null && conditionColumns.contains(firstCol.getName().toLowerCase())) {
+                return idx;
+            }
         }
         return null;
+    }
+
+    private void collectConditionColumns(Expression expr, Set<String> columns) {
+        if (expr instanceof io.github.xinfra.lab.xdb.expression.ColumnRef ref) {
+            columns.add(ref.columnName().toLowerCase());
+        } else if (expr instanceof io.github.xinfra.lab.xdb.expression.BinaryOp op) {
+            collectConditionColumns(op.left(), columns);
+            collectConditionColumns(op.right(), columns);
+        } else if (expr instanceof io.github.xinfra.lab.xdb.expression.UnaryOp uop) {
+            collectConditionColumns(uop.operand(), columns);
+        }
     }
 }

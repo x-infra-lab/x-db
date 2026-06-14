@@ -14,6 +14,7 @@ public final class Codec {
     public static final byte DURATION_FLAG = 0x07;
     public static final byte VARINT_FLAG = 0x08;
     public static final byte UVARINT_FLAG = 0x09;
+    public static final byte BYTES_DATUM_FLAG = 0x0A;
     public static final byte MAX_FLAG = (byte) 0xFE;
 
     private Codec() {}

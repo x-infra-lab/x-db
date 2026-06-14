@@ -6,6 +6,8 @@ import io.github.xinfra.lab.xdb.expression.Row;
 import io.github.xinfra.lab.xdb.meta.ColumnInfo;
 import io.github.xinfra.lab.xdb.session.ExecuteResult;
 import io.github.xinfra.lab.xdb.session.Session;
+import io.github.xinfra.lab.xdb.session.SessionManager;
+import io.github.xinfra.lab.xdb.session.SessionState;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -33,10 +35,15 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
     private static final int COM_STMT_RESET = 0x1A;
     private static final int COM_RESET_CONNECTION = 0x1F;
 
+    private final SessionManager sessionManager;
     private final ConcurrentHashMap<Integer, PreparedStatement> preparedStatements = new ConcurrentHashMap<>();
     private final AtomicInteger stmtIdGen = new AtomicInteger(1);
 
     private record PreparedStatement(String sql, int paramCount) {}
+
+    public CommandHandler(SessionManager sessionManager) {
+        this.sessionManager = sessionManager;
+    }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
@@ -104,8 +111,7 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         log.error("Unhandled error in command handler, closing connection", cause);
         try {
-            sendError(ctx, XDBException.ER_UNKNOWN_ERROR, "HY000",
-                    cause.getMessage() != null ? cause.getMessage() : "Internal error");
+            sendError(ctx, XDBException.ER_UNKNOWN_ERROR, "HY000", "Internal error");
         } finally {
             ctx.close();
         }
@@ -145,8 +151,7 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
             sendError(ctx, e.errorCode(), e.sqlState(), e.getMessage());
         } catch (Exception e) {
             log.error("Query execution failed: {}", sql, e);
-            sendError(ctx, XDBException.ER_UNKNOWN_ERROR, "HY000",
-                    e.getMessage() != null ? e.getMessage() : "Internal error");
+            sendError(ctx, XDBException.ER_UNKNOWN_ERROR, "HY000", "Internal error");
         }
     }
 
@@ -280,8 +285,7 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
             sendError(ctx, e.errorCode(), e.sqlState(), e.getMessage());
         } catch (Exception e) {
             log.error("Prepared statement execution failed: {}", sql, e);
-            sendError(ctx, XDBException.ER_UNKNOWN_ERROR, "HY000",
-                    e.getMessage() != null ? e.getMessage() : "Internal error");
+            sendError(ctx, XDBException.ER_UNKNOWN_ERROR, "HY000", "Internal error");
         }
     }
 
@@ -315,9 +319,8 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
                 log.warn("Failed to close session during reset", e);
             }
         }
-        Session newSession = null;
-        // We don't have access to SessionManager here, so just send OK.
-        // The session will be in a closed state but connection stays alive.
+        Session newSession = sessionManager.createSession();
+        ctx.channel().attr(SESSION_KEY).set(newSession);
         preparedStatements.clear();
         sendOK(ctx, 0, 0);
     }
@@ -389,10 +392,27 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
                 if (val == null) {
                     sb.append("NULL");
                 } else {
-                    sb.append('\'').append(val.replace("'", "''")).append('\'');
+                    sb.append('\'').append(escapeString(val)).append('\'');
                 }
             } else {
                 sb.append(sql.charAt(i));
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String escapeString(String val) {
+        StringBuilder sb = new StringBuilder(val.length() + 8);
+        for (int i = 0; i < val.length(); i++) {
+            char c = val.charAt(i);
+            switch (c) {
+                case '\0' -> sb.append("\\0");
+                case '\'' -> sb.append("\\'");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\032' -> sb.append("\\Z");
+                default -> sb.append(c);
             }
         }
         return sb.toString();
@@ -403,8 +423,13 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
     // -----------------------------------------------------------------------
 
     private void sendOK(ChannelHandlerContext ctx, long affectedRows, long lastInsertId) {
+        int statusFlags = MySQLConstants.SERVER_STATUS_AUTOCOMMIT;
+        Session session = ctx.channel().attr(SESSION_KEY).get();
+        if (session != null && session.state() == SessionState.IN_TRANSACTION) {
+            statusFlags |= MySQLConstants.SERVER_STATUS_IN_TRANS;
+        }
         ByteBuf ok = MySQLPacketWriter.writeOK(ctx.alloc(), affectedRows, lastInsertId,
-                MySQLConstants.SERVER_STATUS_AUTOCOMMIT, 0);
+                statusFlags, 0);
         ctx.writeAndFlush(ok);
     }
 

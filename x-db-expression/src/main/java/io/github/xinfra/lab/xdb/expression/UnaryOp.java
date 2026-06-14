@@ -22,7 +22,13 @@ public final class UnaryOp implements Expression {
         if (v.isNull()) return Datum.nil();
         if (op == Op.NOT) return Datum.of(v.toBoolean() ? 0L : 1L);
         // NEG
-        if (v instanceof Datum.IntDatum i) return Datum.of(-i.value());
+        if (v instanceof Datum.IntDatum i) {
+            try {
+                return Datum.of(Math.negateExact(i.value()));
+            } catch (ArithmeticException e) {
+                return Datum.of(-(double) i.value());
+            }
+        }
         return Datum.of(-v.toDouble());
     }
 

@@ -26,18 +26,18 @@ public final class BinaryOp implements Expression {
         Datum lv = left.eval(ctx, row);
 
         if (op == Op.AND) {
-            if (lv.isNull()) return Datum.nil();
-            if (!lv.toBoolean()) return Datum.of(0L);
+            if (!lv.isNull() && !lv.toBoolean()) return Datum.of(0L);
             Datum rv = right.eval(ctx, row);
-            if (rv.isNull()) return Datum.nil();
-            return Datum.of(rv.toBoolean() ? 1L : 0L);
+            if (!rv.isNull() && !rv.toBoolean()) return Datum.of(0L);
+            if (lv.isNull() || rv.isNull()) return Datum.nil();
+            return Datum.of(1L);
         }
         if (op == Op.OR) {
             if (!lv.isNull() && lv.toBoolean()) return Datum.of(1L);
             Datum rv = right.eval(ctx, row);
-            if (lv.isNull() && rv.isNull()) return Datum.nil();
-            if (rv.isNull()) return Datum.nil();
-            return Datum.of(rv.toBoolean() ? 1L : 0L);
+            if (!rv.isNull() && rv.toBoolean()) return Datum.of(1L);
+            if (lv.isNull() || rv.isNull()) return Datum.nil();
+            return Datum.of(0L);
         }
 
         Datum rv = right.eval(ctx, row);
