@@ -70,6 +70,17 @@ class AggFunctionsTest {
             assertThat(agg.distinct()).isTrue();
             assertThat(agg.arg()).isNotNull();
         }
+
+        @Test
+        void countDistinctSkipsDuplicates() {
+            AggFunction agg = AggFunctions.create(AggFunction.Type.COUNT, null, true);
+            agg.update(Datum.of(1L));
+            agg.update(Datum.of(2L));
+            agg.update(Datum.of(1L));
+            agg.update(Datum.of(3L));
+            agg.update(Datum.of(2L));
+            assertThat(agg.result().toLong()).isEqualTo(3);
+        }
     }
 
     @Nested
@@ -136,6 +147,16 @@ class AggFunctionsTest {
             AggFunction agg = AggFunctions.create(AggFunction.Type.SUM, null, false);
             assertThat(agg.returnType()).isEqualTo(DataType.DECIMAL);
         }
+
+        @Test
+        void sumDistinctSkipsDuplicates() {
+            AggFunction agg = AggFunctions.create(AggFunction.Type.SUM, null, true);
+            agg.update(Datum.of(10L));
+            agg.update(Datum.of(20L));
+            agg.update(Datum.of(10L));
+            Datum result = agg.result();
+            assertThat(((Datum.DecimalDatum) result).value()).isEqualByComparingTo(new java.math.BigDecimal("30"));
+        }
     }
 
     @Nested
@@ -189,6 +210,17 @@ class AggFunctionsTest {
         void returnTypeIsDecimal() {
             AggFunction agg = AggFunctions.create(AggFunction.Type.AVG, null, false);
             assertThat(agg.returnType()).isEqualTo(DataType.DECIMAL);
+        }
+
+        @Test
+        void avgDistinctSkipsDuplicates() {
+            AggFunction agg = AggFunctions.create(AggFunction.Type.AVG, null, true);
+            agg.update(Datum.of(10L));
+            agg.update(Datum.of(20L));
+            agg.update(Datum.of(10L));
+            Datum result = agg.result();
+            // avg of distinct {10, 20} = 15
+            assertThat(((Datum.DecimalDatum) result).value()).isEqualByComparingTo(new java.math.BigDecimal("15.0000"));
         }
     }
 

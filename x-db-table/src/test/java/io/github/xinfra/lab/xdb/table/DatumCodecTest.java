@@ -182,7 +182,7 @@ class DatumCodecTest {
         void encodeDecodeBasic() {
             byte[] data = {1, 2, 3, 4, 5};
             Datum decoded = DatumCodecTest.this.roundTrip(Datum.of(data));
-            // BytesDatum decoded as StringDatum (via BYTES_FLAG -> String path in decode)
+            // BytesDatum round-trips back as BytesDatum (via BYTES_DATUM_FLAG path in decode)
             assertThat(decoded).isNotNull();
         }
 
@@ -191,6 +191,14 @@ class DatumCodecTest {
             byte[] data = {};
             Datum decoded = DatumCodecTest.this.roundTrip(Datum.of(data));
             assertThat(decoded).isNotNull();
+        }
+
+        @Test
+        void roundTripReturnsBytesDatum() {
+            byte[] data = {1, 2, 3, 4, 5};
+            Datum decoded = DatumCodecTest.this.roundTrip(Datum.of(data));
+            assertThat(decoded).isInstanceOf(Datum.BytesDatum.class);
+            assertThat(((Datum.BytesDatum) decoded).value()).isEqualTo(data);
         }
 
         @Test
@@ -228,6 +236,36 @@ class DatumCodecTest {
         void encodedStartsWithDecimalFlag() {
             byte[] encoded = DatumCodec.encode(Datum.of(new BigDecimal("1.0")));
             assertThat(encoded[0]).isEqualTo(Codec.DECIMAL_FLAG);
+        }
+
+        @Test
+        void orderingPreserved() {
+            byte[] e1 = DatumCodec.encode(Datum.of(new BigDecimal("-99.99")));
+            byte[] e2 = DatumCodec.encode(Datum.of(BigDecimal.ZERO));
+            byte[] e3 = DatumCodec.encode(Datum.of(new BigDecimal("9.99")));
+            byte[] e4 = DatumCodec.encode(Datum.of(new BigDecimal("10.00")));
+            byte[] e5 = DatumCodec.encode(Datum.of(new BigDecimal("100.00")));
+
+            assertThat(Codec.compareBytes(e1, e2)).isLessThan(0);
+            assertThat(Codec.compareBytes(e2, e3)).isLessThan(0);
+            assertThat(Codec.compareBytes(e3, e4)).isLessThan(0);
+            assertThat(Codec.compareBytes(e4, e5)).isLessThan(0);
+        }
+
+        @Test
+        void orderingNegativeValues() {
+            byte[] e1 = DatumCodec.encode(Datum.of(new BigDecimal("-100")));
+            byte[] e2 = DatumCodec.encode(Datum.of(new BigDecimal("-10")));
+            byte[] e3 = DatumCodec.encode(Datum.of(new BigDecimal("-1")));
+
+            assertThat(Codec.compareBytes(e1, e2)).isLessThan(0);
+            assertThat(Codec.compareBytes(e2, e3)).isLessThan(0);
+        }
+
+        @Test
+        void encodeDecodeLargeDecimal() {
+            Datum decoded = DatumCodecTest.this.roundTrip(Datum.of(new BigDecimal("123456789.123456789")));
+            assertThat(((Datum.DecimalDatum) decoded).value()).isEqualByComparingTo(new BigDecimal("123456789.123456789"));
         }
     }
 

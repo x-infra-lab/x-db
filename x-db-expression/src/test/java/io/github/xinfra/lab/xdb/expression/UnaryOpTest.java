@@ -65,6 +65,13 @@ class UnaryOpTest {
         void negateZero() {
             assertThat(eval(UnaryOp.Op.NEG, Constant.ofLong(0)).toLong()).isEqualTo(0);
         }
+
+        @Test
+        void negateMinLongReturnsDouble() {
+            Datum result = eval(UnaryOp.Op.NEG, Constant.ofLong(Long.MIN_VALUE));
+            assertThat(result).isInstanceOf(Datum.DoubleDatum.class);
+            assertThat(result.toDouble()).isPositive();
+        }
     }
 
     @Nested

@@ -244,6 +244,38 @@ class BinaryOpTest {
             // false OR null => null
             assertThat(eval(Constant.ofLong(0), BinaryOp.Op.OR, Constant.ofNull()).isNull()).isTrue();
         }
+
+        @Test
+        void andNullAndFalse_returnsFalse() {
+            // NULL AND FALSE = FALSE (SQL three-valued logic)
+            assertThat(eval(Constant.ofNull(), BinaryOp.Op.AND, Constant.ofLong(0)).toLong()).isEqualTo(0);
+        }
+
+        @Test
+        void andFalseAndNull_returnsFalse() {
+            assertThat(eval(Constant.ofLong(0), BinaryOp.Op.AND, Constant.ofNull()).toLong()).isEqualTo(0);
+        }
+
+        @Test
+        void orNullOrTrue_returnsTrue() {
+            // NULL OR TRUE = TRUE
+            assertThat(eval(Constant.ofNull(), BinaryOp.Op.OR, Constant.ofLong(1)).toLong()).isEqualTo(1);
+        }
+
+        @Test
+        void orTrueOrNull_returnsTrue() {
+            assertThat(eval(Constant.ofLong(1), BinaryOp.Op.OR, Constant.ofNull()).toLong()).isEqualTo(1);
+        }
+
+        @Test
+        void orFalseOrNull_returnsNull() {
+            assertThat(eval(Constant.ofLong(0), BinaryOp.Op.OR, Constant.ofNull()).isNull()).isTrue();
+        }
+
+        @Test
+        void andNullAndNull_returnsNull() {
+            assertThat(eval(Constant.ofNull(), BinaryOp.Op.AND, Constant.ofNull()).isNull()).isTrue();
+        }
     }
 
     // ==================== returnType ====================
