@@ -40,41 +40,38 @@ public class IndexLookupExecutor implements Executor {
 
     @Override
     public Row next() throws Exception {
-        Row indexRow = indexScan.next();
-        if (indexRow == null) {
-            return null;
-        }
-
-        // The index scan output should include the handle column.
-        // Find the handle value from the index row (last column or handle column).
-        long handle = findHandle(indexRow);
-
-        // Point-get the row data
-        byte[] rowKey = TableCodec.encodeRowKey(table.getId(), handle);
-        byte[] rowValue = txnCtx.getter().get(rowKey);
-
-        if (rowValue == null) {
-            // Row has been deleted but index not yet cleaned up, skip
-            return next();
-        }
-
-        Map<Long, Datum> colValues = RowCodec.decode(rowValue);
-
-        // Build output row from the full row data
-        Datum[] values = new Datum[outputColumns.size()];
-        for (int i = 0; i < outputColumns.size(); i++) {
-            ColumnInfo col = outputColumns.get(i);
-            Datum v = colValues.get(col.getId());
-            if (v != null) {
-                values[i] = v;
-            } else if (isHandleColumn(col)) {
-                values[i] = Datum.of(handle);
-            } else {
-                values[i] = Datum.nil();
+        while (true) {
+            Row indexRow = indexScan.next();
+            if (indexRow == null) {
+                return null;
             }
-        }
 
-        return new Row(values);
+            long handle = findHandle(indexRow);
+
+            byte[] rowKey = TableCodec.encodeRowKey(table.getId(), handle);
+            byte[] rowValue = txnCtx.getter().get(rowKey);
+
+            if (rowValue == null) {
+                continue;
+            }
+
+            Map<Long, Datum> colValues = RowCodec.decode(rowValue);
+
+            Datum[] values = new Datum[outputColumns.size()];
+            for (int i = 0; i < outputColumns.size(); i++) {
+                ColumnInfo col = outputColumns.get(i);
+                Datum v = colValues.get(col.getId());
+                if (v != null) {
+                    values[i] = v;
+                } else if (isHandleColumn(col)) {
+                    values[i] = Datum.of(handle);
+                } else {
+                    values[i] = Datum.nil();
+                }
+            }
+
+            return new Row(values);
+        }
     }
 
     @Override

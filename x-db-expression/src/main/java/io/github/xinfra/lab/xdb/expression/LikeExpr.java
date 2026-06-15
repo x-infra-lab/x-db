@@ -1,12 +1,9 @@
 package io.github.xinfra.lab.xdb.expression;
 
-import java.util.regex.Pattern;
-
 public final class LikeExpr implements Expression {
     private final Expression expr;
     private final Expression pattern;
     private final boolean not;
-    private volatile Pattern cachedPattern;
 
     public LikeExpr(Expression expr, Expression pattern, boolean not) {
         this.expr = expr;
@@ -19,38 +16,53 @@ public final class LikeExpr implements Expression {
         Datum v = expr.eval(ctx, row);
         Datum p = pattern.eval(ctx, row);
         if (v.isNull() || p.isNull()) return Datum.nil();
-        Pattern compiled = cachedPattern;
-        if (compiled == null) {
-            compiled = compilePattern(p.toStringValue());
-            if (pattern instanceof Constant) {
-                cachedPattern = compiled;
-            }
-        }
-        boolean matches = compiled.matcher(v.toStringValue()).matches();
+        boolean matches = matchDirect(v.toStringValue(), p.toStringValue());
         return Datum.of((matches ^ not) ? 1L : 0L);
     }
 
-    private static Pattern compilePattern(String pattern) {
-        StringBuilder regex = new StringBuilder("^");
-        for (int i = 0; i < pattern.length(); i++) {
-            char c = pattern.charAt(i);
-            switch (c) {
-                case '%' -> regex.append(".*");
-                case '_' -> regex.append(".");
-                case '\\' -> {
-                    if (i + 1 < pattern.length()) {
-                        regex.append(Pattern.quote(String.valueOf(pattern.charAt(++i))));
-                    }
+    static boolean matchDirect(String str, String pat) {
+        int si = 0, pi = 0;
+        int sLen = str.length(), pLen = pat.length();
+        int starPi = -1, starSi = -1;
+
+        while (si < sLen) {
+            if (pi < pLen && pat.charAt(pi) == '%') {
+                starPi = pi;
+                starSi = si;
+                pi++;
+            } else if (pi < pLen && pat.charAt(pi) == '\\' && pi + 1 < pLen) {
+                if (Character.toLowerCase(str.charAt(si)) == Character.toLowerCase(pat.charAt(pi + 1))) {
+                    si++;
+                    pi += 2;
+                } else if (starPi != -1) {
+                    pi = starPi + 1;
+                    starSi++;
+                    si = starSi;
+                } else {
+                    return false;
                 }
-                default -> regex.append(Pattern.quote(String.valueOf(c)));
+            } else if (pi < pLen && (pat.charAt(pi) == '_'
+                    || Character.toLowerCase(str.charAt(si)) == Character.toLowerCase(pat.charAt(pi)))) {
+                si++;
+                pi++;
+            } else if (starPi != -1) {
+                pi = starPi + 1;
+                starSi++;
+                si = starSi;
+            } else {
+                return false;
             }
         }
-        regex.append("$");
-        return Pattern.compile(regex.toString(), Pattern.CASE_INSENSITIVE);
+
+        while (pi < pLen && pat.charAt(pi) == '%') {
+            pi++;
+        }
+
+        return pi == pLen;
     }
 
     static boolean likeMatch(String str, String pattern) {
-        return compilePattern(pattern).matcher(str).matches();
+        return matchDirect(str, pattern);
     }
 
     @Override public DataType returnType() { return DataType.BOOLEAN; }

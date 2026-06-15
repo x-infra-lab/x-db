@@ -63,11 +63,14 @@ A distributed SQL database built on [x-kv](https://github.com/x-infra-lab/x-kv).
 
 ## SQL Features
 
-- **DDL**: `CREATE DATABASE`, `DROP DATABASE`, `CREATE TABLE`, `DROP TABLE`, `SHOW TABLES`
-- **DML**: `INSERT`, `SELECT`, `UPDATE`, `DELETE`
-- **Expressions**: arithmetic, comparison, `AND`/`OR`/`NOT`, string literals, integers
-- **Query**: `WHERE`, `ORDER BY` (ASC/DESC), `LIMIT`, `SELECT` without `FROM`
-- **Types**: `BIGINT`, `INT`, `VARCHAR`, `BOOLEAN`
+- **DDL**: `CREATE/DROP DATABASE`, `CREATE/DROP/ALTER/TRUNCATE TABLE`, `ANALYZE TABLE`
+- **DML**: `INSERT`, `SELECT`, `UPDATE` (with JOIN), `DELETE` (with JOIN)
+- **Expressions**: arithmetic, comparison, `AND`/`OR`/`NOT`, `LIKE`, `IN`, `BETWEEN`, `CASE WHEN`, `CAST`
+- **Subqueries**: scalar subquery, `IN (SELECT ...)`, `EXISTS (SELECT ...)`
+- **Query**: `WHERE`, `JOIN` (INNER/LEFT/RIGHT/CROSS), `GROUP BY`/`HAVING`, `ORDER BY`, `LIMIT`/`OFFSET`
+- **Aggregates**: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `GROUP_CONCAT`
+- **Types**: `BIGINT`, `INT`, `SMALLINT`, `TINYINT`, `FLOAT`, `DOUBLE`, `DECIMAL`, `VARCHAR`, `TEXT`, `BLOB`, `DATETIME`, `BOOLEAN`
+- **Security**: `mysql_native_password` authentication, TLS/SSL encryption
 
 ## Quick Start
 
@@ -127,11 +130,6 @@ mvn clean test
 
 ## Known Limitations
 
-- No password authentication (accepts all connections)
-- No TLS/SSL support
-- No subqueries or `EXISTS`
-- No `JOIN` in DML (`UPDATE`, `DELETE`)
-- No `ALTER TABLE` (use DDL schema change API)
 - Single-node query execution (no distributed query planning)
 
 ## License

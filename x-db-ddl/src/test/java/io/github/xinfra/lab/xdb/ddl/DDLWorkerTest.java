@@ -30,26 +30,40 @@ class DDLWorkerTest {
     void setUp() {
         metaStore = new InMemoryMetaStore();
         jobQueue = new InMemoryDDLJobQueue();
-        ownerManager = new DDLOwnerManager(
-                "test-node",
-                k -> {
-                    synchronized (kvStore) {
-                        for (var entry : kvStore.entrySet()) {
-                            if (java.util.Arrays.equals(entry.getKey(), k)) {
-                                return entry.getValue();
-                            }
-                        }
-                        return null;
-                    }
-                },
-                (k, v) -> {
-                    synchronized (kvStore) {
-                        // Remove old key if exists (byte[] equality)
-                        kvStore.entrySet().removeIf(e -> java.util.Arrays.equals(e.getKey(), k));
-                        kvStore.put(k, v);
+        DDLOwnerManager.KVGetter getter = k -> {
+            synchronized (kvStore) {
+                for (var entry : kvStore.entrySet()) {
+                    if (java.util.Arrays.equals(entry.getKey(), k)) {
+                        return entry.getValue();
                     }
                 }
-        );
+                return null;
+            }
+        };
+        DDLOwnerManager.KVPutter putter = (k, v) -> {
+            synchronized (kvStore) {
+                kvStore.entrySet().removeIf(e -> java.util.Arrays.equals(e.getKey(), k));
+                kvStore.put(k, v);
+            }
+        };
+        DDLOwnerManager.CASOperation cas = (k, expected, newVal) -> {
+            synchronized (kvStore) {
+                byte[] current = null;
+                for (var entry : kvStore.entrySet()) {
+                    if (java.util.Arrays.equals(entry.getKey(), k)) {
+                        current = entry.getValue();
+                        break;
+                    }
+                }
+                if (java.util.Arrays.equals(current, expected)) {
+                    kvStore.entrySet().removeIf(e -> java.util.Arrays.equals(e.getKey(), k));
+                    kvStore.put(k, newVal);
+                    return true;
+                }
+                return false;
+            }
+        };
+        ownerManager = new DDLOwnerManager("test-node", getter, putter, cas);
         schemaChangeExecutor = new SchemaChangeExecutor(metaStore);
         worker = new DDLWorker(ownerManager, jobQueue, schemaChangeExecutor, () -> {});
     }
@@ -260,6 +274,198 @@ class DDLWorkerTest {
     }
 
     // -----------------------------------------------------------------------
+    // Lease expiry during multi-step DDL
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("DDL job fails when lease is lost during state transitions")
+    void leaseExpiredAbortsDDL() throws InterruptedException {
+        // Create a database and table first
+        DDLJob createDbJob = new DDLJob();
+        createDbJob.setType(DDLType.CREATE_DATABASE);
+        createDbJob.setDbId(1);
+        createDbJob.setDbName("testdb");
+        createDbJob.setSchemaState(SchemaState.ABSENT);
+        jobQueue.enqueue(createDbJob);
+
+        startWorker();
+        assertJobDone(createDbJob.getId(), 10_000);
+
+        TableInfo tableInfo = buildSimpleTable(100, "users");
+        DDLJob createTableJob = new DDLJob();
+        createTableJob.setType(DDLType.CREATE_TABLE);
+        createTableJob.setDbId(1);
+        createTableJob.setTableId(100);
+        createTableJob.setTableInfo(tableInfo);
+        createTableJob.setSchemaState(SchemaState.ABSENT);
+        jobQueue.enqueue(createTableJob);
+        assertJobDone(createTableJob.getId(), 10_000);
+
+        worker.shutdown();
+        workerThread.join(5000);
+
+        // Clear kvStore so the rigged manager can claim ownership fresh
+        synchronized (kvStore) {
+            kvStore.clear();
+        }
+
+        // CAS counter: allow 3 successful CAS calls (tryBecomeOwner + outer renewLease
+        // + first inner renewLease in processJobs), then fail on the 4th to simulate
+        // lease loss mid-transition.
+        java.util.concurrent.atomic.AtomicInteger casCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        DDLOwnerManager riggedManager = new DDLOwnerManager(
+                "rigged-node",
+                k -> {
+                    synchronized (kvStore) {
+                        for (var entry : kvStore.entrySet()) {
+                            if (java.util.Arrays.equals(entry.getKey(), k)) {
+                                return entry.getValue();
+                            }
+                        }
+                        return null;
+                    }
+                },
+                (k, v) -> {
+                    synchronized (kvStore) {
+                        kvStore.entrySet().removeIf(e -> java.util.Arrays.equals(e.getKey(), k));
+                        kvStore.put(k, v);
+                    }
+                },
+                (k, expected, newVal) -> {
+                    synchronized (kvStore) {
+                        if (casCount.incrementAndGet() > 3) {
+                            return false;
+                        }
+                        byte[] current = null;
+                        for (var entry : kvStore.entrySet()) {
+                            if (java.util.Arrays.equals(entry.getKey(), k)) {
+                                current = entry.getValue();
+                                break;
+                            }
+                        }
+                        if (java.util.Arrays.equals(current, expected)) {
+                            kvStore.entrySet().removeIf(e -> java.util.Arrays.equals(e.getKey(), k));
+                            kvStore.put(k, newVal);
+                            return true;
+                        }
+                        return false;
+                    }
+                }
+        );
+
+        // DROP TABLE is multi-step (PUBLIC → WRITE_ONLY → DELETE_ONLY → removed)
+        // The rigged CAS will fail after 1 transition, aborting the DDL mid-way
+        DDLJob dropTableJob = new DDLJob();
+        dropTableJob.setType(DDLType.DROP_TABLE);
+        dropTableJob.setDbId(1);
+        dropTableJob.setTableId(100);
+        dropTableJob.setSchemaState(SchemaState.PUBLIC);
+        jobQueue.enqueue(dropTableJob);
+
+        worker = new DDLWorker(riggedManager, jobQueue, schemaChangeExecutor, () -> {});
+        workerThread = new Thread(worker, "ddl-worker-test");
+        workerThread.setDaemon(true);
+        workerThread.start();
+
+        assertJobDone(dropTableJob.getId(), 30_000);
+        DDLJob result = jobQueue.getJob(dropTableJob.getId());
+        assertThat(result.getState()).isIn(DDLState.FAILED, DDLState.ROLLED_BACK);
+        assertThat(result.getError()).contains("lease");
+
+        // Table should still exist (rollback restored it to PUBLIC)
+        TableInfo restored = metaStore.getTable(1, 100);
+        assertThat(restored).isNotNull();
+        assertThat(restored.getState()).isEqualTo(SchemaState.PUBLIC);
+    }
+
+    // -----------------------------------------------------------------------
+    // DDL failure rollback
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Failed ADD_COLUMN rolls back: removes partially-added column")
+    void addColumnFailureRollsBack() throws InterruptedException {
+        // Create database and table
+        DDLJob createDbJob = new DDLJob();
+        createDbJob.setType(DDLType.CREATE_DATABASE);
+        createDbJob.setDbId(1);
+        createDbJob.setDbName("testdb");
+        createDbJob.setSchemaState(SchemaState.ABSENT);
+        jobQueue.enqueue(createDbJob);
+
+        startWorker();
+        assertJobDone(createDbJob.getId(), 10_000);
+
+        TableInfo tableInfo = buildSimpleTable(200, "orders");
+        DDLJob createTableJob = new DDLJob();
+        createTableJob.setType(DDLType.CREATE_TABLE);
+        createTableJob.setDbId(1);
+        createTableJob.setTableId(200);
+        createTableJob.setTableInfo(tableInfo);
+        createTableJob.setSchemaState(SchemaState.ABSENT);
+        jobQueue.enqueue(createTableJob);
+        assertJobDone(createTableJob.getId(), 10_000);
+
+        // Stop original worker
+        worker.shutdown();
+        workerThread.join(5000);
+
+        // Create a SchemaChangeExecutor that throws on the 2nd execution (after ABSENT→DELETE_ONLY)
+        java.util.concurrent.atomic.AtomicInteger execCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        SchemaChangeExecutor failingExecutor = new SchemaChangeExecutor(metaStore) {
+            @Override
+            public void execute(DDLJob j) {
+                if (j.getType() == DDLType.ADD_COLUMN && execCount.incrementAndGet() == 2) {
+                    throw new RuntimeException("Simulated failure during ADD_COLUMN");
+                }
+                super.execute(j);
+            }
+        };
+
+        ColumnInfo newCol = new ColumnInfo();
+        newCol.setId(3);
+        newCol.setName("amount");
+        newCol.setType(io.github.xinfra.lab.xdb.expression.DataType.BIGINT);
+        newCol.setOffset(2);
+
+        DDLJob addColJob = new DDLJob();
+        addColJob.setType(DDLType.ADD_COLUMN);
+        addColJob.setDbId(1);
+        addColJob.setTableId(200);
+        addColJob.setColumnInfo(newCol);
+        addColJob.setSchemaState(SchemaState.ABSENT);
+        jobQueue.enqueue(addColJob);
+
+        worker = new DDLWorker(ownerManager, jobQueue, failingExecutor, () -> {});
+        workerThread = new Thread(worker, "ddl-worker-test");
+        workerThread.setDaemon(true);
+        workerThread.start();
+
+        assertJobDone(addColJob.getId(), 30_000);
+        DDLJob result = jobQueue.getJob(addColJob.getId());
+        assertThat(result.getState()).isIn(DDLState.FAILED, DDLState.ROLLED_BACK);
+
+        // The partially-added column should have been removed by rollback
+        TableInfo t = metaStore.getTable(1, 200);
+        assertThat(t).isNotNull();
+        boolean hasAmountCol = t.getColumns().stream().anyMatch(c -> c.getName().equals("amount"));
+        assertThat(hasAmountCol).as("Rolled-back column 'amount' should not exist").isFalse();
+    }
+
+    // -----------------------------------------------------------------------
+    // CAS required
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("DDLOwnerManager rejects null CAS operation")
+    void ownerManagerRequiresCAS() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                new DDLOwnerManager("node", k -> null, (k, v) -> {}, null)
+        ).isInstanceOf(IllegalArgumentException.class)
+         .hasMessageContaining("CASOperation is required");
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
@@ -267,7 +473,9 @@ class DDLWorkerTest {
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
             DDLJob job = jobQueue.getJob(jobId);
-            if (job != null && (job.getState() == DDLState.DONE || job.getState() == DDLState.FAILED)) {
+            if (job != null && (job.getState() == DDLState.DONE
+                    || job.getState() == DDLState.FAILED
+                    || job.getState() == DDLState.ROLLED_BACK)) {
                 return;
             }
             Thread.sleep(100);
@@ -275,8 +483,8 @@ class DDLWorkerTest {
         DDLJob job = jobQueue.getJob(jobId);
         assertThat(job).as("Job %d should exist", jobId).isNotNull();
         assertThat(job.getState())
-                .as("Job %d should be DONE or FAILED, was %s", jobId, job.getState())
-                .isIn(DDLState.DONE, DDLState.FAILED);
+                .as("Job %d should be DONE, FAILED, or ROLLED_BACK, was %s", jobId, job.getState())
+                .isIn(DDLState.DONE, DDLState.FAILED, DDLState.ROLLED_BACK);
     }
 
     private TableInfo buildSimpleTable(long id, String name) {

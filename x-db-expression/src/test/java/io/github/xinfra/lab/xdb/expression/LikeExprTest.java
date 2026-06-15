@@ -114,6 +114,26 @@ class LikeExprTest {
         }
     }
 
+    @Nested
+    class ReDoSResilience {
+
+        @Test
+        void adversarialPatternCompletesQuickly() {
+            String adversarial = "%a%b%c%d%e%f%g%h%i%j%";
+            String input = "x".repeat(50_000);
+            long start = System.nanoTime();
+            assertThat(LikeExpr.likeMatch(input, adversarial)).isFalse();
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            assertThat(elapsedMs).isLessThan(1000);
+        }
+
+        @Test
+        void manyWildcardsWithMatch() {
+            String input = "abcdefghij" + "x".repeat(10_000);
+            assertThat(LikeExpr.likeMatch(input, "%a%b%c%d%e%f%g%h%i%j%")).isTrue();
+        }
+    }
+
     @Test
     void returnTypeIsBoolean() {
         LikeExpr expr = new LikeExpr(Constant.ofString("a"), Constant.ofString("%"), false);

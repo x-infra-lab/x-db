@@ -40,7 +40,7 @@ public class PhysicalUpdate implements PhysicalPlan {
 
     @Override
     public String explain(int indent) {
-        return indentStr(indent) + "PhysicalUpdate(" + table.getName() + ")\n" +
+        return indentStr(indent) + "PhysicalUpdate(" + table.getName() + costInfo() + ")\n" +
                 child.explain(indent + 1);
     }
 }

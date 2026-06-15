@@ -13,6 +13,8 @@ import io.github.xinfra.lab.xdb.meta.TableInfo;
 import io.github.xinfra.lab.xdb.table.RowCodec;
 import io.github.xinfra.lab.xdb.table.TableCodec;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -190,6 +192,14 @@ public class UpdateExecutor implements Executor {
             if (index.isUnique()) {
                 indexKey = TableCodec.encodeIndexKey(table.getId(), index.getId(),
                         indexValues, null);
+                byte[] existing = txnCtx.getter().get(indexKey);
+                if (existing != null) {
+                    throw XDBException.dupEntry(
+                            indexValues.stream()
+                                    .map(Datum::toStringValue)
+                                    .reduce((a, b) -> a + "-" + b).orElse(""),
+                            index.getName());
+                }
                 indexValue = io.github.xinfra.lab.xdb.table.DatumCodec.encode(Datum.of(handle));
             } else {
                 indexKey = TableCodec.encodeIndexKey(table.getId(), index.getId(),

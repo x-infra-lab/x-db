@@ -20,6 +20,10 @@ public class XDBConfig {
     private String pdAddresses = "127.0.0.1:2379";
     private int workerThreads = Runtime.getRuntime().availableProcessors() * 2;
     private int maxConnections = 1000;
+    private String rootPassword = "";
+    private boolean tlsEnabled = false;
+    private String tlsCertFile = "";
+    private String tlsKeyFile = "";
 
     public XDBConfig() {}
 
@@ -81,6 +85,16 @@ public class XDBConfig {
             if (wt > 0) config.workerThreads(wt);
         }
         if (yaml.containsKey("maxConnections")) config.maxConnections(((Number) yaml.get("maxConnections")).intValue());
+        if (yaml.containsKey("rootPassword")) config.rootPassword((String) yaml.get("rootPassword"));
+        if (yaml.containsKey("tls")) {
+            Object tlsObj = yaml.get("tls");
+            if (tlsObj instanceof Map) {
+                Map<String, Object> tls = (Map<String, Object>) tlsObj;
+                if (tls.containsKey("enabled")) config.tlsEnabled(Boolean.TRUE.equals(tls.get("enabled")));
+                if (tls.containsKey("certFile")) config.tlsCertFile((String) tls.get("certFile"));
+                if (tls.containsKey("keyFile")) config.tlsKeyFile((String) tls.get("keyFile"));
+            }
+        }
     }
 
     // ---- Getters ----
@@ -99,6 +113,22 @@ public class XDBConfig {
 
     public int maxConnections() {
         return maxConnections;
+    }
+
+    public String rootPassword() {
+        return rootPassword;
+    }
+
+    public boolean tlsEnabled() {
+        return tlsEnabled;
+    }
+
+    public String tlsCertFile() {
+        return tlsCertFile;
+    }
+
+    public String tlsKeyFile() {
+        return tlsKeyFile;
     }
 
     // ---- Builder-style setters ----
@@ -120,6 +150,26 @@ public class XDBConfig {
 
     public XDBConfig maxConnections(int maxConnections) {
         this.maxConnections = maxConnections;
+        return this;
+    }
+
+    public XDBConfig rootPassword(String rootPassword) {
+        this.rootPassword = rootPassword != null ? rootPassword : "";
+        return this;
+    }
+
+    public XDBConfig tlsEnabled(boolean tlsEnabled) {
+        this.tlsEnabled = tlsEnabled;
+        return this;
+    }
+
+    public XDBConfig tlsCertFile(String tlsCertFile) {
+        this.tlsCertFile = tlsCertFile != null ? tlsCertFile : "";
+        return this;
+    }
+
+    public XDBConfig tlsKeyFile(String tlsKeyFile) {
+        this.tlsKeyFile = tlsKeyFile != null ? tlsKeyFile : "";
         return this;
     }
 }

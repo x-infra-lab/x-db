@@ -14,4 +14,8 @@ public interface PhysicalPlan {
     default String indentStr(int indent) {
         return "  ".repeat(indent);
     }
+
+    default String costInfo() {
+        return String.format(", cost=%.1f, rows=%d", estimatedCost(), estimatedRowCount());
+    }
 }

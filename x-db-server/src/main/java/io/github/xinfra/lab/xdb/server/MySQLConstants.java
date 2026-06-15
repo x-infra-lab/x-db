@@ -53,6 +53,7 @@ public final class MySQLConstants {
     public static final int CLIENT_SECURE_CONNECTION = 0x00008000;
     public static final int CLIENT_PLUGIN_AUTH = 0x00080000;
     public static final int CLIENT_CONNECT_WITH_DB = 0x00000008;
+    public static final int CLIENT_SSL = 0x00000800;
     public static final int CLIENT_DEPRECATE_EOF = 0x01000000;
 
     // ---- Character sets ----

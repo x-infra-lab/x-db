@@ -40,6 +40,8 @@ public class XDBException extends RuntimeException {
     public static final int ER_SCHEMA_CHANGED = 1815;
     public static final int ER_DB_EXISTS = 1007;
     public static final int ER_DB_DROP_EXISTS = 1008;
+    public static final int ER_DATA_OUT_OF_RANGE = 1690;
+    public static final int ER_MEM_EXCEEDED = 8175;
 
     public static XDBException parseError(String message) {
         return new XDBException(ER_PARSE_ERROR, "42000", message);
@@ -76,6 +78,21 @@ public class XDBException extends RuntimeException {
 
     public static XDBException internal(String message, Throwable cause) {
         return new XDBException(ER_UNKNOWN_ERROR, "HY000", message, cause);
+    }
+
+    public static XDBException memoryExceeded(String operator, long consumed, long limit) {
+        return new XDBException(ER_MEM_EXCEEDED, "HY000",
+            String.format("Operator '%s' exceeded memory limit: %d bytes (limit: %d bytes)",
+                operator, consumed, limit));
+    }
+
+    public static XDBException dataOutOfRange(String message) {
+        return new XDBException(ER_DATA_OUT_OF_RANGE, "22003", message);
+    }
+
+    public static XDBException txnTimeout(long elapsedMs, long limitMs) {
+        return new XDBException(ER_LOCK_WAIT_TIMEOUT, "40001",
+            String.format("Transaction has timed out (elapsed: %dms, limit: %dms)", elapsedMs, limitMs));
     }
 
     public static XDBException dbExists(String name) {

@@ -26,7 +26,7 @@ public class MySQLPacketDecoder extends ByteToMessageDecoder {
         while (in.readableBytes() >= HEADER_SIZE) {
             in.markReaderIndex();
 
-            int payloadLength = in.readMediumLE();
+            int payloadLength = in.readUnsignedMediumLE();
             int sequenceId = in.readByte() & 0xFF;
 
             if (in.readableBytes() < payloadLength) {

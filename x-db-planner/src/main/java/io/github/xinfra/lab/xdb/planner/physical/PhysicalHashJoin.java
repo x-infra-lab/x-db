@@ -61,7 +61,7 @@ public class PhysicalHashJoin implements PhysicalPlan {
         StringBuilder sb = new StringBuilder();
         sb.append(indentStr(indent)).append("PhysicalHashJoin(").append(joinType);
         if (condition != null) sb.append(", on=").append(condition.toSQL());
-        sb.append(")\n");
+        sb.append(costInfo()).append(")\n");
         sb.append(indentStr(indent + 1)).append("[build]\n").append(buildSide.explain(indent + 2)).append("\n");
         sb.append(indentStr(indent + 1)).append("[probe]\n").append(probeSide.explain(indent + 2));
         return sb.toString();

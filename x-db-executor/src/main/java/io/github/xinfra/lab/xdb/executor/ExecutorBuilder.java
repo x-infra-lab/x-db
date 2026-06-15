@@ -16,7 +16,10 @@ import io.github.xinfra.lab.xdb.executor.scan.IndexScanExecutor;
 import io.github.xinfra.lab.xdb.executor.scan.TableScanExecutor;
 import io.github.xinfra.lab.xdb.executor.util.DualExecutor;
 import io.github.xinfra.lab.xdb.executor.util.ShowExecutor;
+import io.github.xinfra.lab.xdb.common.MemoryTracker;
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.expression.EvalContext;
+import io.github.xinfra.lab.xdb.expression.Expression;
 import io.github.xinfra.lab.xdb.meta.InfoSchema;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalDelete;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalDual;
@@ -45,16 +48,31 @@ public class ExecutorBuilder {
     private final TransactionContext txnCtx;
     private final InfoSchema infoSchema;
     private final String currentDatabase;
+    private final MemoryTracker memTracker;
+    private SubqueryMaterializer subqueryMaterializer;
 
     public ExecutorBuilder(TransactionContext txnCtx) {
-        this(txnCtx, null, null);
+        this(txnCtx, null, null, MemoryTracker.noopTracker());
     }
 
     public ExecutorBuilder(TransactionContext txnCtx, InfoSchema infoSchema,
                            String currentDatabase) {
+        this(txnCtx, infoSchema, currentDatabase, MemoryTracker.noopTracker());
+    }
+
+    public ExecutorBuilder(TransactionContext txnCtx, InfoSchema infoSchema,
+                           String currentDatabase, MemoryTracker memTracker) {
         this.txnCtx = txnCtx;
         this.infoSchema = infoSchema;
         this.currentDatabase = currentDatabase;
+        this.memTracker = memTracker;
+    }
+
+    private SubqueryMaterializer materializer() {
+        if (subqueryMaterializer == null) {
+            subqueryMaterializer = new SubqueryMaterializer(this);
+        }
+        return subqueryMaterializer;
     }
 
     /**
@@ -94,7 +112,7 @@ public class ExecutorBuilder {
         } else if (plan instanceof PhysicalShowStmt p) {
             return buildShow(p);
         } else {
-            throw new RuntimeException("Unsupported physical plan: " + plan.getClass().getSimpleName());
+            throw XDBException.internal("Unsupported plan: " + plan.getClass().getSimpleName());
         }
     }
 
@@ -118,19 +136,22 @@ public class ExecutorBuilder {
     private Executor buildProjection(PhysicalProjection plan) {
         Executor child = build(plan.child());
         EvalContext evalCtx = txnCtx.evalContext();
-        return new ProjectionExecutor(child, plan.expressions(), plan.outputSchema(), evalCtx);
+        java.util.List<Expression> exprs = materializer().materializeAll(plan.expressions());
+        return new ProjectionExecutor(child, exprs, plan.outputSchema(), evalCtx);
     }
 
     private Executor buildSelection(PhysicalSelection plan) {
         Executor child = build(plan.child());
         EvalContext evalCtx = txnCtx.evalContext();
-        return new SelectionExecutor(child, plan.conditions(), evalCtx);
+        java.util.List<Expression> conditions = materializer().materializeAll(plan.conditions());
+        return new SelectionExecutor(child, conditions, evalCtx);
     }
 
     private Executor buildSort(PhysicalSort plan) {
         Executor child = build(plan.child());
         EvalContext evalCtx = txnCtx.evalContext();
-        return new SortExecutor(child, plan.orderByExprs(), plan.ascending(), evalCtx);
+        return new SortExecutor(child, plan.orderByExprs(), plan.ascending(), evalCtx,
+                memTracker.newChild("sort"));
     }
 
     private Executor buildLimit(PhysicalLimit plan) {
@@ -142,7 +163,7 @@ public class ExecutorBuilder {
         Executor child = build(plan.child());
         EvalContext evalCtx = txnCtx.evalContext();
         return new HashAggExecutor(child, plan.groupByExprs(), plan.aggFunctions(),
-                plan.outputSchema(), evalCtx);
+                plan.outputSchema(), evalCtx, memTracker.newChild("hash_agg"));
     }
 
     private Executor buildStreamAgg(PhysicalStreamAgg plan) {
@@ -158,7 +179,7 @@ public class ExecutorBuilder {
         EvalContext evalCtx = txnCtx.evalContext();
         return new HashJoinExecutor(buildSide, probeSide, plan.joinType(),
                 plan.condition(), plan.buildKeys(), plan.probeKeys(),
-                plan.outputSchema(), evalCtx);
+                plan.outputSchema(), evalCtx, memTracker.newChild("hash_join"));
     }
 
     private Executor buildNestedLoopJoin(PhysicalNestedLoopJoin plan) {

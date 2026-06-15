@@ -1,5 +1,6 @@
 package io.github.xinfra.lab.xdb.planner;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.expression.*;
 import io.github.xinfra.lab.xdb.meta.ColumnInfo;
 import io.github.xinfra.lab.xdb.meta.InfoSchema;
@@ -176,7 +177,7 @@ public class Analyzer {
             targetCols = new ArrayList<>();
             for (String colName : stmt.getColumns()) {
                 ColumnInfo col = table.getColumn(colName);
-                if (col == null) throw new RuntimeException("Column not found: " + colName);
+                if (col == null) throw XDBException.badField(colName);
                 targetCols.add(col);
             }
         } else {
@@ -197,7 +198,12 @@ public class Analyzer {
 
     private LogicalPlan analyzeUpdate(UpdateStmt stmt) {
         TableInfo table = resolveTable(stmt.getTableName());
-        LogicalPlan scan = new LogicalTableScan(table, null);
+        LogicalPlan scan;
+        if (stmt.getFrom() != null) {
+            scan = analyzeTableRef(stmt.getFrom());
+        } else {
+            scan = new LogicalTableScan(table, null);
+        }
 
         if (stmt.getWhere() != null) {
             Expression whereExpr = resolveExpr(stmt.getWhere(), scan);
@@ -208,7 +214,7 @@ public class Analyzer {
         List<Expression> updateVals = new ArrayList<>();
         for (Assignment assign : stmt.getAssignments()) {
             ColumnInfo col = table.getColumn(assign.getColumn());
-            if (col == null) throw new RuntimeException("Column not found: " + assign.getColumn());
+            if (col == null) throw XDBException.badField(assign.getColumn());
             updateCols.add(col);
             updateVals.add(resolveExpr(assign.getValue(), scan));
         }
@@ -218,7 +224,12 @@ public class Analyzer {
 
     private LogicalPlan analyzeDelete(DeleteStmt stmt) {
         TableInfo table = resolveTable(stmt.getTableName());
-        LogicalPlan scan = new LogicalTableScan(table, null);
+        LogicalPlan scan;
+        if (stmt.getFrom() != null) {
+            scan = analyzeTableRef(stmt.getFrom());
+        } else {
+            scan = new LogicalTableScan(table, null);
+        }
 
         if (stmt.getWhere() != null) {
             Expression whereExpr = resolveExpr(stmt.getWhere(), scan);
@@ -286,6 +297,10 @@ public class Analyzer {
         }
         if (node instanceof io.github.xinfra.lab.xdb.parser.ast.InExpr in) {
             Expression expr = resolveExpr(in.getExpr(), scope);
+            if (in.getValues().size() == 1 && in.getValues().get(0) instanceof SubqueryExpr sub) {
+                LogicalPlan subPlan = analyzeSelect(sub.getQuery());
+                return new InSubqueryRef(expr, subPlan, in.isNot());
+            }
             List<Expression> values = new ArrayList<>();
             for (ExprNode val : in.getValues()) {
                 values.add(resolveExpr(val, scope));
@@ -323,11 +338,13 @@ public class Analyzer {
                     ? resolveExpr(caseExpr.getElseExpr(), scope) : null;
             return new io.github.xinfra.lab.xdb.expression.CaseWhenExpr(caseVal, whens, elseExpr);
         }
-        if (node instanceof SubqueryExpr) {
-            throw new UnsupportedOperationException("Subqueries are not supported");
+        if (node instanceof SubqueryExpr sub) {
+            LogicalPlan subPlan = analyzeSelect(sub.getQuery());
+            return new ScalarSubqueryRef(subPlan);
         }
-        if (node instanceof ExistsExpr) {
-            throw new UnsupportedOperationException("EXISTS is not supported");
+        if (node instanceof ExistsExpr exists) {
+            LogicalPlan subPlan = analyzeSelect(exists.getSubquery());
+            return new ExistsSubqueryRef(subPlan);
         }
         if (node instanceof StarExpr) {
             return Constant.ofNull();
@@ -360,7 +377,7 @@ public class Analyzer {
                 return new ColumnRef(ref.getTableName(), col.getName(), i, col.getType());
             }
         }
-        throw new RuntimeException("Column '" + ref.getColumnName() + "' not found");
+        throw XDBException.badField(ref.getColumnName());
     }
 
     private void analyzeSelectItems(SelectStmt stmt, LogicalPlan plan,
@@ -412,11 +429,11 @@ public class Analyzer {
 
     private TableInfo resolveTable(String tableName) {
         if (currentDatabase == null) {
-            throw new RuntimeException("No database selected");
+            throw XDBException.noDatabase();
         }
         TableInfo table = infoSchema.getTable(currentDatabase, tableName);
         if (table == null) {
-            throw new RuntimeException("Table not found: " + tableName);
+            throw XDBException.tableNotFound(tableName);
         }
         return table;
     }

@@ -37,6 +37,6 @@ public class PhysicalInsert implements PhysicalPlan {
 
     @Override
     public String explain(int indent) {
-        return indentStr(indent) + "PhysicalInsert(" + table.getName() + ", rows=" + rows.size() + ")";
+        return indentStr(indent) + "PhysicalInsert(" + table.getName() + costInfo() + ")";
     }
 }

@@ -1,5 +1,6 @@
 package io.github.xinfra.lab.xdb.ddl;
 
+import io.github.xinfra.lab.xdb.meta.SchemaState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -72,15 +73,19 @@ public class DDLWorker implements Runnable {
         job.setState(DDLState.RUNNING);
         jobQueue.updateJob(job);
 
+        SchemaState stateBeforeTransition = job.getSchemaState();
+
         try {
-            // Execute state transitions one at a time.
-            // Between each transition, wait for STATE_WAIT_MS to ensure
-            // all nodes observe the new schema version (2-version invariant).
             while (job.getSchemaState() != null) {
+                if (!ownerManager.renewLease()) {
+                    throw new DDLLeaseExpiredException(
+                            "Lost DDL owner lease during job " + job.getId());
+                }
+
+                stateBeforeTransition = job.getSchemaState();
                 schemaChangeExecutor.execute(job);
                 schemaReloadCallback.run();
 
-                // Wait for all nodes to catch up (unless operation is complete)
                 if (job.getSchemaState() != null) {
                     log.debug("Waiting {}ms for schema version propagation (2-version invariant), job={}",
                             STATE_WAIT_MS, job.getId());
@@ -93,18 +98,47 @@ public class DDLWorker implements Runnable {
             log.info("DDL job completed: id={}, type={}, version={}", job.getId(), job.getType(), job.getVersion());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            job.setState(DDLState.FAILED);
             job.setError("DDL job interrupted");
             log.warn("DDL job interrupted: id={}", job.getId());
+            rollbackSchema(job, stateBeforeTransition);
+            if (job.getState() != DDLState.ROLLED_BACK) {
+                job.setState(DDLState.FAILED);
+            }
+        } catch (DDLLeaseExpiredException e) {
+            job.setError(e.getMessage());
+            log.error("DDL job lost lease: id={}, error={}", job.getId(), e.getMessage());
+            rollbackSchema(job, stateBeforeTransition);
+            if (job.getState() != DDLState.ROLLED_BACK) {
+                job.setState(DDLState.FAILED);
+            }
         } catch (Exception e) {
-            job.setState(DDLState.FAILED);
             job.setError(e.getMessage());
             log.error("DDL job failed: id={}, error={}", job.getId(), e.getMessage(), e);
+            rollbackSchema(job, stateBeforeTransition);
+            if (job.getState() != DDLState.ROLLED_BACK) {
+                job.setState(DDLState.FAILED);
+            }
         }
 
         jobQueue.updateJob(job);
         jobQueue.moveToHistory(job);
         schemaReloadCallback.run();
+    }
+
+    private void rollbackSchema(DDLJob job, SchemaState failedAt) {
+        if (failedAt == null) {
+            return;
+        }
+        try {
+            job.setState(DDLState.ROLLING_BACK);
+            schemaChangeExecutor.rollback(job, failedAt);
+            schemaReloadCallback.run();
+            job.setState(DDLState.ROLLED_BACK);
+            log.info("DDL job rolled back: id={}, rolledBackFrom={}", job.getId(), failedAt);
+        } catch (Exception rollbackErr) {
+            log.error("DDL job rollback failed: id={}, state={}, error={}",
+                    job.getId(), failedAt, rollbackErr.getMessage(), rollbackErr);
+        }
     }
 
     /**

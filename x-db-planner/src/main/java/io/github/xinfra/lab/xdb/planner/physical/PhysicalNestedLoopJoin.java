@@ -53,7 +53,7 @@ public class PhysicalNestedLoopJoin implements PhysicalPlan {
         StringBuilder sb = new StringBuilder();
         sb.append(indentStr(indent)).append("PhysicalNestedLoopJoin(").append(joinType);
         if (condition != null) sb.append(", on=").append(condition.toSQL());
-        sb.append(")\n");
+        sb.append(costInfo()).append(")\n");
         sb.append(outer.explain(indent + 1)).append("\n");
         sb.append(inner.explain(indent + 1));
         return sb.toString();

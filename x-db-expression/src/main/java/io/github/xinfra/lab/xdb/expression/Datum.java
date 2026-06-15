@@ -84,6 +84,17 @@ public sealed interface Datum permits
 
     default String toStringValue() { return toString(); }
 
+    static long estimateMemoryBytes(Datum d) {
+        if (d == null || d instanceof NullDatum) return 16;
+        if (d instanceof IntDatum) return 24;
+        if (d instanceof DoubleDatum) return 24;
+        if (d instanceof DecimalDatum) return 56;
+        if (d instanceof StringDatum sd) return 40 + (long) sd.value().length() * 2;
+        if (d instanceof BytesDatum bd) return 24 + bd.value().length;
+        if (d instanceof DateTimeDatum) return 48;
+        return 24;
+    }
+
     default boolean toBoolean() {
         if (this instanceof NullDatum) return false;
         if (this instanceof IntDatum d) return d.value != 0;

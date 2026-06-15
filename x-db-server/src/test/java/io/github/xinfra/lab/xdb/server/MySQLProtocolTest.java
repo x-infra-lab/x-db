@@ -37,17 +37,26 @@ class MySQLProtocolTest {
         InMemoryDDLJobQueue jobQueue = new InMemoryDDLJobQueue();
 
         Map<byte[], byte[]> ownerKV = new HashMap<>();
-        DDLOwnerManager ownerManager = new DDLOwnerManager(
-                "test-node",
-                k -> { synchronized (ownerKV) {
+        DDLOwnerManager.KVGetter ownerGetter = k -> { synchronized (ownerKV) {
                     for (var e : ownerKV.entrySet()) if (Arrays.equals(e.getKey(), k)) return e.getValue();
                     return null;
-                }},
-                (k, v) -> { synchronized (ownerKV) {
+                }};
+        DDLOwnerManager.KVPutter ownerPutter = (k, v) -> { synchronized (ownerKV) {
                     ownerKV.entrySet().removeIf(e -> Arrays.equals(e.getKey(), k));
                     ownerKV.put(k, v);
-                }}
-        );
+                }};
+        DDLOwnerManager.CASOperation ownerCas = (k, expected, newVal) -> { synchronized (ownerKV) {
+                    byte[] cur = null;
+                    for (var e : ownerKV.entrySet()) if (Arrays.equals(e.getKey(), k)) { cur = e.getValue(); break; }
+                    if (Arrays.equals(cur, expected)) {
+                        ownerKV.entrySet().removeIf(e -> Arrays.equals(e.getKey(), k));
+                        ownerKV.put(k, newVal);
+                        return true;
+                    }
+                    return false;
+                }};
+        DDLOwnerManager ownerManager = new DDLOwnerManager(
+                "test-node", ownerGetter, ownerPutter, ownerCas);
 
         InfoSchemaHolder schemaHolder = new InfoSchemaHolder(metaStore);
         SchemaChangeExecutor schemaChangeExecutor = new SchemaChangeExecutor(metaStore);

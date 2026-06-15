@@ -36,6 +36,6 @@ public class PhysicalLimit implements PhysicalPlan {
     public String explain(int indent) {
         String s = indentStr(indent) + "PhysicalLimit(count=" + count;
         if (offset > 0) s += ", offset=" + offset;
-        return s + ")\n" + child.explain(indent + 1);
+        return s + costInfo() + ")\n" + child.explain(indent + 1);
     }
 }

@@ -50,6 +50,6 @@ public class PhysicalIndexScan implements PhysicalPlan {
     @Override
     public String explain(int indent) {
         return indentStr(indent) + "PhysicalIndexScan(" + table.getName() +
-                ", idx=" + index.getName() + ", rows=" + estimatedRows + ")";
+                ", idx=" + index.getName() + costInfo() + ")";
     }
 }

@@ -40,6 +40,6 @@ public class PhysicalShowStmt implements PhysicalPlan {
     public String explain(int indent) {
         String s = indentStr(indent) + "PhysicalShow(" + showType;
         if (tableName != null) s += ", table=" + tableName;
-        return s + ")";
+        return s + costInfo() + ")";
     }
 }

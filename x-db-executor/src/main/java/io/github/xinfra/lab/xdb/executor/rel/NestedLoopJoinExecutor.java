@@ -134,9 +134,15 @@ public class NestedLoopJoinExecutor implements Executor {
 
     @Override
     public void close() throws Exception {
-        outer.close();
-        inner.close();
-        innerRows = null;
+        try {
+            outer.close();
+        } finally {
+            try {
+                inner.close();
+            } finally {
+                innerRows = null;
+            }
+        }
     }
 
     @Override

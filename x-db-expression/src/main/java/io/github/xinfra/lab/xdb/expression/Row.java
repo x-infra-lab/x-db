@@ -19,5 +19,13 @@ public final class Row {
 
     public Row copy() { return new Row(Arrays.copyOf(values, values.length)); }
 
+    public long estimateMemoryBytes() {
+        long size = 32 + (long) values.length * 8;
+        for (Datum d : values) {
+            size += Datum.estimateMemoryBytes(d);
+        }
+        return size;
+    }
+
     @Override public String toString() { return Arrays.toString(values); }
 }

@@ -174,7 +174,7 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
             sendError(ctx, e.errorCode(), e.sqlState(), e.getMessage());
         } catch (Exception e) {
             sendError(ctx, XDBException.ER_BAD_DB, "42000",
-                    "Unknown database '" + dbName + "'");
+                    "Unknown database '" + sanitizeForError(dbName) + "'");
         }
     }
 
@@ -221,10 +221,7 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
                 .toString().trim();
         log.debug("COM_STMT_PREPARE: {}", sql);
 
-        int paramCount = 0;
-        for (int i = 0; i < sql.length(); i++) {
-            if (sql.charAt(i) == '?') paramCount++;
-        }
+        int paramCount = findParamPositions(sql).size();
 
         int stmtId = stmtIdGen.getAndIncrement();
         preparedStatements.put(stmtId, new PreparedStatement(sql, paramCount));
@@ -383,31 +380,69 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
         return (int) buf.readLongLE();
     }
 
-    private String substituteParams(String sql, String[] params) {
-        StringBuilder sb = new StringBuilder(sql.length() + 64);
-        int paramIdx = 0;
-        for (int i = 0; i < sql.length(); i++) {
-            if (sql.charAt(i) == '?' && paramIdx < params.length) {
-                String val = params[paramIdx++];
-                if (val == null) {
-                    sb.append("NULL");
-                } else {
-                    sb.append('\'').append(escapeString(val)).append('\'');
+    static List<Integer> findParamPositions(String sql) {
+        List<Integer> positions = new ArrayList<>();
+        int i = 0;
+        int len = sql.length();
+        while (i < len) {
+            char c = sql.charAt(i);
+            if (c == '\'' || c == '"') {
+                char quote = c;
+                i++;
+                while (i < len) {
+                    if (sql.charAt(i) == '\\') {
+                        i += 2;
+                    } else if (sql.charAt(i) == quote) {
+                        i++;
+                        break;
+                    } else {
+                        i++;
+                    }
                 }
+            } else if (c == '-' && i + 1 < len && sql.charAt(i + 1) == '-') {
+                i += 2;
+                while (i < len && sql.charAt(i) != '\n') i++;
+            } else if (c == '/' && i + 1 < len && sql.charAt(i + 1) == '*') {
+                i += 2;
+                while (i + 1 < len && !(sql.charAt(i) == '*' && sql.charAt(i + 1) == '/')) i++;
+                if (i + 1 < len) i += 2;
+            } else if (c == '?') {
+                positions.add(i);
+                i++;
             } else {
-                sb.append(sql.charAt(i));
+                i++;
             }
         }
+        return positions;
+    }
+
+    static String substituteParams(String sql, String[] params) {
+        List<Integer> positions = findParamPositions(sql);
+        StringBuilder sb = new StringBuilder(sql.length() + 64);
+        int lastPos = 0;
+        for (int idx = 0; idx < positions.size() && idx < params.length; idx++) {
+            int pos = positions.get(idx);
+            sb.append(sql, lastPos, pos);
+            String val = params[idx];
+            if (val == null) {
+                sb.append("NULL");
+            } else {
+                sb.append('\'').append(escapeString(val)).append('\'');
+            }
+            lastPos = pos + 1;
+        }
+        sb.append(sql, lastPos, sql.length());
         return sb.toString();
     }
 
-    private static String escapeString(String val) {
+    static String escapeString(String val) {
         StringBuilder sb = new StringBuilder(val.length() + 8);
         for (int i = 0; i < val.length(); i++) {
             char c = val.charAt(i);
             switch (c) {
                 case '\0' -> sb.append("\\0");
                 case '\'' -> sb.append("\\'");
+                case '"' -> sb.append("\\\"");
                 case '\\' -> sb.append("\\\\");
                 case '\n' -> sb.append("\\n");
                 case '\r' -> sb.append("\\r");
@@ -619,6 +654,21 @@ public class CommandHandler extends ChannelInboundHandlerAdapter {
 
         ExecuteResult result = ExecuteResult.query(columns, List.of(new Row(datums)));
         sendResultSet(ctx, result);
+    }
+
+    static String sanitizeForError(String input) {
+        if (input == null) return "";
+        String s = input.length() > 64 ? input.substring(0, 64) + "..." : input;
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x20 && c < 0x7F) {
+                sb.append(c);
+            } else {
+                sb.append('?');
+            }
+        }
+        return sb.toString();
     }
 
     private String getSystemVariable(String varExpr) {

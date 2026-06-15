@@ -1,6 +1,8 @@
 package io.github.xinfra.lab.xdb.session;
 
 import io.github.xinfra.lab.xdb.ddl.DDLExecutor;
+import io.github.xinfra.lab.xdb.common.MemoryTracker;
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.executor.Executor;
 import io.github.xinfra.lab.xdb.executor.ExecutorBuilder;
 import io.github.xinfra.lab.xdb.executor.TransactionContext;
@@ -15,6 +17,7 @@ import io.github.xinfra.lab.xdb.meta.InfoSchema;
 import io.github.xinfra.lab.xdb.meta.MetaStore;
 import io.github.xinfra.lab.xdb.parser.SQLParser;
 import io.github.xinfra.lab.xdb.parser.ast.AlterTableStmt;
+import io.github.xinfra.lab.xdb.parser.ast.AnalyzeTableStmt;
 import io.github.xinfra.lab.xdb.parser.ast.BeginStmt;
 import io.github.xinfra.lab.xdb.parser.ast.CommitStmt;
 import io.github.xinfra.lab.xdb.parser.ast.CreateDatabaseStmt;
@@ -36,6 +39,9 @@ import io.github.xinfra.lab.xdb.parser.ast.TruncateTableStmt;
 import io.github.xinfra.lab.xdb.parser.ast.UpdateStmt;
 import io.github.xinfra.lab.xdb.parser.ast.UseStmt;
 import io.github.xinfra.lab.xdb.planner.Planner;
+import io.github.xinfra.lab.xdb.planner.cost.ColumnStatistics;
+import io.github.xinfra.lab.xdb.planner.cost.StatsStore;
+import io.github.xinfra.lab.xdb.planner.cost.TableStatistics;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalPlan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,7 +63,7 @@ public class SessionImpl implements Session {
     private final long id;
     private final SessionVariable variables;
     private volatile SessionState state;
-    private String currentDatabase;
+    private volatile String currentDatabase;
     private final InfoSchemaHolder schemaHolder;
     private final DDLExecutor ddlExecutor;
     private final DDLHandler ddlHandler;
@@ -88,6 +94,7 @@ public class SessionImpl implements Session {
         this.txnManager = txnManager;
         this.metaStore = metaStore;
         this.onClose = onClose;
+        this.txnManager.setTxnTimeout(variables.getTxnTimeout());
     }
 
     // ---------------------------------------------------------------
@@ -108,14 +115,14 @@ public class SessionImpl implements Session {
             return dispatch(stmt, sql);
 
         } catch (Exception e) {
-            if (variables.isAutoCommit() && txnManager.isActive()) {
+            if (state != SessionState.IN_TRANSACTION && txnManager.isActive()) {
                 txnManager.rollbackQuietly();
             }
             log.error("Session {}: execution failed for SQL: {}", id, truncateSQL(sql), e);
             if (e instanceof RuntimeException re) {
                 throw re;
             }
-            throw new RuntimeException("Execution failed: " + e.getMessage(), e);
+            throw XDBException.internal("Internal error", e);
         }
     }
 
@@ -131,7 +138,7 @@ public class SessionImpl implements Session {
     public void commit() {
         checkState();
         if (!txnManager.isActive()) {
-            throw new IllegalStateException("No active transaction to commit");
+            throw new XDBException(1792, "25000", "No active transaction to commit");
         }
         txnManager.commit();
         state = SessionState.IDLE;
@@ -142,7 +149,7 @@ public class SessionImpl implements Session {
     public void rollback() {
         checkState();
         if (!txnManager.isActive()) {
-            throw new IllegalStateException("No active transaction to rollback");
+            throw new XDBException(1792, "25000", "No active transaction to rollback");
         }
         txnManager.rollback();
         state = SessionState.IDLE;
@@ -157,7 +164,7 @@ public class SessionImpl implements Session {
         InfoSchema is = schemaHolder.get();
         DatabaseInfo db = is.getDatabase(dbName);
         if (db == null) {
-            throw new RuntimeException("Unknown database '" + dbName + "'");
+            throw XDBException.badDatabase(dbName);
         }
         this.currentDatabase = dbName;
         log.debug("Session {}: switched to database '{}'", id, dbName);
@@ -170,14 +177,14 @@ public class SessionImpl implements Session {
 
     @Override
     public void close() {
-        if (state == SessionState.CLOSED) {
-            return;
-        }
-        state = SessionState.CLOSING;
-        try {
-            if (txnManager.isActive()) {
-                txnManager.rollbackQuietly();
+        synchronized (this) {
+            if (state == SessionState.CLOSED || state == SessionState.CLOSING) {
+                return;
             }
+            state = SessionState.CLOSING;
+        }
+        try {
+            txnManager.rollbackQuietly();
         } finally {
             state = SessionState.CLOSED;
             log.debug("Session {}: closed", id);
@@ -246,6 +253,11 @@ public class SessionImpl implements Session {
             return handleDescribe(describeStmt);
         }
 
+        // ANALYZE TABLE
+        if (stmt instanceof AnalyzeTableStmt analyzeStmt) {
+            return handleAnalyzeTable(analyzeStmt);
+        }
+
         // DML / query: SELECT, INSERT, UPDATE, DELETE, SHOW
         return handleDMLOrQuery(stmt);
     }
@@ -266,7 +278,7 @@ public class SessionImpl implements Session {
     private ExecuteResult handleDDL(Statement stmt) {
         // DDL should not run inside an explicit transaction
         if (state == SessionState.IN_TRANSACTION) {
-            throw new RuntimeException("Cannot execute DDL inside an explicit transaction");
+            throw new XDBException(1568, "25001", "Cannot execute DDL inside an explicit transaction");
         }
         return ddlHandler.handleDDL(stmt, currentDatabase);
     }
@@ -278,6 +290,9 @@ public class SessionImpl implements Session {
     private ExecuteResult handleSet(SetStmt stmt) {
         String value = evaluateExprToString(stmt.getValue());
         variables.set(stmt.getVariable(), value);
+        if ("txn_timeout".equalsIgnoreCase(stmt.getVariable())) {
+            txnManager.setTxnTimeout(variables.getTxnTimeout());
+        }
         log.debug("Session {}: SET {} = {}", id, stmt.getVariable(), value);
         return ExecuteResult.ok();
     }
@@ -307,13 +322,13 @@ public class SessionImpl implements Session {
 
     private ExecuteResult handleDescribe(DescribeStmt stmt) {
         if (currentDatabase == null) {
-            throw new RuntimeException("No database selected");
+            throw XDBException.noDatabase();
         }
         schemaHolder.refresh();
         InfoSchema is = schemaHolder.get();
         var table = is.getTable(currentDatabase, stmt.getTableName());
         if (table == null) {
-            throw new RuntimeException("Table '" + stmt.getTableName() + "' does not exist");
+            throw XDBException.tableNotFound(stmt.getTableName());
         }
 
         // Build DESCRIBE columns: Field, Type, Null, Key, Default, Extra
@@ -368,6 +383,95 @@ public class SessionImpl implements Session {
     }
 
     // ---------------------------------------------------------------
+    // ANALYZE TABLE
+    // ---------------------------------------------------------------
+
+    private ExecuteResult handleAnalyzeTable(AnalyzeTableStmt stmt) throws Exception {
+        if (currentDatabase == null) {
+            throw XDBException.noDatabase();
+        }
+        schemaHolder.refresh();
+        InfoSchema is = schemaHolder.get();
+        io.github.xinfra.lab.xdb.meta.TableInfo table = is.getTable(currentDatabase, stmt.getTableName());
+        if (table == null) {
+            throw XDBException.tableNotFound(stmt.getTableName());
+        }
+
+        boolean autoStarted = !txnManager.isActive();
+        txnManager.beginIfNeeded(true);
+        try {
+            TransactionContext txnCtx = txnManager.currentContext();
+            ExecutorBuilder builder = new ExecutorBuilder(txnCtx, is, currentDatabase);
+
+            List<ColumnInfo> columns = table.getPublicColumns();
+            Planner planner = new Planner(is);
+            Statement selectStmt = SQLParser.parse("SELECT * FROM " + stmt.getTableName());
+            PhysicalPlan plan = planner.plan(selectStmt, currentDatabase);
+            Executor exec = builder.build(plan);
+
+            long rowCount = 0;
+            long dataSize = 0;
+            java.util.Map<String, java.util.Set<String>> distinctValues = new java.util.HashMap<>();
+            java.util.Map<String, Long> nullCounts = new java.util.HashMap<>();
+
+            for (ColumnInfo col : columns) {
+                distinctValues.put(col.getName().toLowerCase(), new java.util.HashSet<>());
+                nullCounts.put(col.getName().toLowerCase(), 0L);
+            }
+
+            exec.open();
+            try {
+                Row row;
+                while ((row = exec.next()) != null) {
+                    rowCount++;
+                    for (int i = 0; i < columns.size() && i < row.size(); i++) {
+                        ColumnInfo col = columns.get(i);
+                        String colKey = col.getName().toLowerCase();
+                        Datum val = row.get(i);
+                        if (val == null || val.isNull()) {
+                            nullCounts.merge(colKey, 1L, Long::sum);
+                        } else {
+                            distinctValues.get(colKey).add(val.toStringValue());
+                        }
+                    }
+                    dataSize += Datum.estimateMemoryBytes(null) * columns.size();
+                }
+            } finally {
+                exec.close();
+            }
+
+            if (autoStarted && txnManager.isActive()) {
+                txnManager.commit();
+            }
+
+            TableStatistics stats = new TableStatistics(rowCount, dataSize);
+            for (ColumnInfo col : columns) {
+                String colKey = col.getName().toLowerCase();
+                ColumnStatistics colStats = new ColumnStatistics(
+                        distinctValues.get(colKey).size(),
+                        null, null,
+                        nullCounts.getOrDefault(colKey, 0L),
+                        rowCount);
+                stats.putColumnStat(col.getName(), colStats);
+            }
+            StatsStore.getInstance().putTableStats(table.getId(), stats);
+
+            ColumnInfo msgCol = new ColumnInfo();
+            msgCol.setName("Msg_text");
+            msgCol.setType(io.github.xinfra.lab.xdb.expression.DataType.VARCHAR);
+            Row resultRow = new Row(new Datum[]{
+                    Datum.of("Table '" + stmt.getTableName() + "' analyzed: "
+                            + rowCount + " rows, " + columns.size() + " columns")});
+            return ExecuteResult.query(List.of(msgCol), List.of(resultRow));
+        } catch (Exception e) {
+            if (autoStarted && txnManager.isActive()) {
+                txnManager.rollbackQuietly();
+            }
+            throw e;
+        }
+    }
+
+    // ---------------------------------------------------------------
     // DML / Query execution pipeline
     // ---------------------------------------------------------------
 
@@ -396,9 +500,13 @@ public class SessionImpl implements Session {
             Planner planner = new Planner(is);
             PhysicalPlan physicalPlan = planner.plan(stmt, currentDatabase);
 
-            // Build executor
+            // Build executor with memory tracking
             TransactionContext txnCtx = txnManager.currentContext();
-            ExecutorBuilder executorBuilder = new ExecutorBuilder(txnCtx, is, currentDatabase);
+            MemoryTracker stmtTracker = new MemoryTracker(
+                    "statement", null, variables.getMemQuotaQuery());
+            stmtTracker.setActionOnExceed(new MemoryTracker.CancelAction());
+            ExecutorBuilder executorBuilder = new ExecutorBuilder(
+                    txnCtx, is, currentDatabase, stmtTracker);
             Executor executor = executorBuilder.build(physicalPlan);
 
             // Execute
@@ -442,7 +550,7 @@ public class SessionImpl implements Session {
         while ((row = executor.next()) != null) {
             rows.add(row);
             if (rows.size() >= MAX_RESULT_ROWS) {
-                throw new RuntimeException("Result set too large (exceeds " + MAX_RESULT_ROWS + " rows)");
+                throw XDBException.internal("Result set too large (exceeds " + MAX_RESULT_ROWS + " rows)");
             }
         }
 
@@ -477,7 +585,7 @@ public class SessionImpl implements Session {
 
     private void checkState() {
         if (state == SessionState.CLOSED || state == SessionState.CLOSING) {
-            throw new IllegalStateException("Session " + id + " is closed");
+            throw XDBException.internal("Session is closed");
         }
     }
 

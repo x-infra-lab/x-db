@@ -18,6 +18,8 @@ public class SessionVariable {
     private String transactionIsolation = "REPEATABLE-READ";
     private long queryTimeout = 0;
     private boolean readOnly = false;
+    private long memQuotaQuery = 1L << 30; // 1GB default, matches TiDB
+    private long txnTimeout = 60_000; // ms, 0 = no timeout
 
     /** Catch-all map for user-defined / unrecognised variables. */
     private final Map<String, String> variables = new HashMap<>();
@@ -57,6 +59,11 @@ public class SessionVariable {
             case "transaction_read_only":
             case "tx_read_only":
                 return readOnly ? "ON" : "OFF";
+            case "tidb_mem_quota_query":
+            case "mem_quota_query":
+                return Long.toString(memQuotaQuery);
+            case "txn_timeout":
+                return Long.toString(txnTimeout);
             default:
                 return variables.get(lower);
         }
@@ -98,6 +105,13 @@ public class SessionVariable {
             case "transaction_read_only":
             case "tx_read_only":
                 this.readOnly = toBool(value);
+                break;
+            case "tidb_mem_quota_query":
+            case "mem_quota_query":
+                this.memQuotaQuery = Long.parseLong(value);
+                break;
+            case "txn_timeout":
+                this.txnTimeout = Long.parseLong(value);
                 break;
             default:
                 variables.put(lower, value);
@@ -155,6 +169,22 @@ public class SessionVariable {
 
     public void setReadOnly(boolean readOnly) {
         this.readOnly = readOnly;
+    }
+
+    public long getMemQuotaQuery() {
+        return memQuotaQuery;
+    }
+
+    public void setMemQuotaQuery(long memQuotaQuery) {
+        this.memQuotaQuery = memQuotaQuery;
+    }
+
+    public long getTxnTimeout() {
+        return txnTimeout;
+    }
+
+    public void setTxnTimeout(long txnTimeout) {
+        this.txnTimeout = txnTimeout;
     }
 
     // ----------------------------------------------------------------

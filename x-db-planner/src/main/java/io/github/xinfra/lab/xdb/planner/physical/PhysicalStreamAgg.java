@@ -45,7 +45,7 @@ public class PhysicalStreamAgg implements PhysicalPlan {
         StringBuilder sb = new StringBuilder();
         sb.append(indentStr(indent)).append("PhysicalStreamAgg(");
         if (!groupByExprs.isEmpty()) sb.append("groupBy=").append(groupByExprs.size()).append(", ");
-        sb.append("aggs=").append(aggFunctions.size()).append(")\n");
+        sb.append("aggs=").append(aggFunctions.size()).append(costInfo()).append(")\n");
         sb.append(child.explain(indent + 1));
         return sb.toString();
     }

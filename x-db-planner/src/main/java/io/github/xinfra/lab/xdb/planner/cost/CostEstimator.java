@@ -10,9 +10,20 @@ public class CostEstimator {
     private static final double MEMORY_FACTOR = 0.5;
     private static final double NETWORK_FACTOR = 1.0;
 
+    private final StatsStore statsStore;
+
+    public CostEstimator() {
+        this(StatsStore.getInstance());
+    }
+
+    public CostEstimator(StatsStore statsStore) {
+        this.statsStore = statsStore;
+    }
+
     public double estimateCost(PhysicalPlan plan) {
         if (plan instanceof PhysicalTableScan scan) {
-            return scan.estimatedRowCount() * SCAN_FACTOR;
+            long rows = estimateRowCount(scan);
+            return rows * SCAN_FACTOR;
         }
         if (plan instanceof PhysicalIndexScan scan) {
             return scan.estimatedRowCount() * INDEX_FACTOR;
@@ -49,5 +60,13 @@ public class CostEstimator {
             return estimateCost(agg.child()) + agg.child().estimatedRowCount() * CPU_FACTOR;
         }
         return plan.estimatedCost();
+    }
+
+    private long estimateRowCount(PhysicalTableScan scan) {
+        TableStatistics stats = statsStore.getTableStats(scan.table().getId());
+        if (stats != null && stats.getRowCount() > 0) {
+            return stats.getRowCount();
+        }
+        return scan.estimatedRowCount();
     }
 }

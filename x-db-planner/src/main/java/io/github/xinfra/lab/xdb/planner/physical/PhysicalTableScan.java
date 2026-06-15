@@ -48,7 +48,7 @@ public class PhysicalTableScan implements PhysicalPlan {
         StringBuilder sb = new StringBuilder();
         sb.append(indentStr(indent)).append("PhysicalTableScan(").append(table.getName());
         if (alias != null) sb.append(" AS ").append(alias);
-        sb.append(", rows=").append(estimatedRows).append(")");
+        sb.append(costInfo()).append(")");
         if (!accessConditions.isEmpty()) sb.append(" cond=").append(accessConditions);
         return sb.toString();
     }

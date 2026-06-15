@@ -1,9 +1,11 @@
 package io.github.xinfra.lab.xdb.expression;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BinaryOpTest {
 
@@ -275,6 +277,47 @@ class BinaryOpTest {
         @Test
         void andNullAndNull_returnsNull() {
             assertThat(eval(Constant.ofNull(), BinaryOp.Op.AND, Constant.ofNull()).isNull()).isTrue();
+        }
+    }
+
+    // ==================== Overflow Detection ====================
+
+    @Nested
+    class OverflowDetection {
+
+        @Test
+        void addOverflowThrows() {
+            assertThatThrownBy(() -> eval(Long.MAX_VALUE, BinaryOp.Op.ADD, 1))
+                    .isInstanceOf(XDBException.class)
+                    .hasMessageContaining("BIGINT value is out of range");
+        }
+
+        @Test
+        void subOverflowThrows() {
+            assertThatThrownBy(() -> eval(Long.MIN_VALUE, BinaryOp.Op.SUB, 1))
+                    .isInstanceOf(XDBException.class)
+                    .hasMessageContaining("BIGINT value is out of range");
+        }
+
+        @Test
+        void mulOverflowThrows() {
+            assertThatThrownBy(() -> eval(Long.MAX_VALUE, BinaryOp.Op.MUL, 2))
+                    .isInstanceOf(XDBException.class)
+                    .hasMessageContaining("BIGINT value is out of range");
+        }
+
+        @Test
+        void intDivOverflowThrows() {
+            assertThatThrownBy(() -> eval(Long.MIN_VALUE, BinaryOp.Op.INT_DIV, -1))
+                    .isInstanceOf(XDBException.class)
+                    .hasMessageContaining("BIGINT value is out of range");
+        }
+
+        @Test
+        void noOverflowWithinRange() {
+            assertThat(eval(Long.MAX_VALUE, BinaryOp.Op.ADD, 0).toLong()).isEqualTo(Long.MAX_VALUE);
+            assertThat(eval(Long.MAX_VALUE, BinaryOp.Op.SUB, 1).toLong()).isEqualTo(Long.MAX_VALUE - 1);
+            assertThat(eval(Long.MIN_VALUE, BinaryOp.Op.ADD, 1).toLong()).isEqualTo(Long.MIN_VALUE + 1);
         }
     }
 

@@ -19,5 +19,5 @@ public class PhysicalDual implements PhysicalPlan {
     public long estimatedRowCount() { return 1; }
 
     @Override
-    public String explain(int indent) { return indentStr(indent) + "PhysicalDual"; }
+    public String explain(int indent) { return indentStr(indent) + "PhysicalDual(" + costInfo() + ")"; }
 }

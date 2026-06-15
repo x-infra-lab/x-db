@@ -54,7 +54,7 @@ public class PhysicalHashAgg implements PhysicalPlan {
             }
             sb.append("], ");
         }
-        sb.append("aggs=").append(aggFunctions.size()).append(")\n");
+        sb.append("aggs=").append(aggFunctions.size()).append(costInfo()).append(")\n");
         sb.append(child.explain(indent + 1));
         return sb.toString();
     }

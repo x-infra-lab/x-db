@@ -9,10 +9,15 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.File;
+import javax.net.ssl.SSLException;
 
 /**
  * MySQL-protocol-compatible server for x-db, built on Netty.
@@ -35,6 +40,7 @@ public class XDBServer {
     private EventLoopGroup workerGroup;
     private EventExecutorGroup queryExecutorGroup;
     private Channel serverChannel;
+    private SslContext sslContext;
 
     public XDBServer(XDBConfig config, SessionManager sessionManager) {
         this.config = config;
@@ -51,6 +57,14 @@ public class XDBServer {
         queryExecutorGroup = new DefaultEventExecutorGroup(config.workerThreads(),
                 r -> { Thread t = new Thread(r); t.setName("query-exec-" + t.getId()); return t; });
 
+        if (config.tlsEnabled()) {
+            sslContext = SslContextBuilder.forServer(
+                    new File(config.tlsCertFile()),
+                    new File(config.tlsKeyFile())
+            ).build();
+            log.info("TLS enabled: cert={}, key={}", config.tlsCertFile(), config.tlsKeyFile());
+        }
+
         ServerBootstrap bootstrap = new ServerBootstrap()
                 .group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
@@ -61,7 +75,9 @@ public class XDBServer {
                                 .addLast("decoder", new MySQLPacketDecoder())
                                 .addLast("encoder", new MySQLPacketEncoder())
                                 .addLast("auth", new AuthenticationHandler(
-                                        sessionManager, config.maxConnections(), queryExecutorGroup));
+                                        sessionManager, config.maxConnections(),
+                                        queryExecutorGroup, config.rootPassword(),
+                                        sslContext));
                     }
                 })
                 .option(ChannelOption.SO_BACKLOG, 128)

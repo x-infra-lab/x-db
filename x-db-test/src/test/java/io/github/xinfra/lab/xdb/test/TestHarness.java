@@ -60,6 +60,20 @@ public class TestHarness implements AutoCloseable {
                         ownerKV.entrySet().removeIf(e -> java.util.Arrays.equals(e.getKey(), k));
                         ownerKV.put(k, v);
                     }
+                },
+                (k, expected, newVal) -> {
+                    synchronized (ownerKV) {
+                        byte[] cur = null;
+                        for (var entry : ownerKV.entrySet()) {
+                            if (java.util.Arrays.equals(entry.getKey(), k)) { cur = entry.getValue(); break; }
+                        }
+                        if (java.util.Arrays.equals(cur, expected)) {
+                            ownerKV.entrySet().removeIf(e -> java.util.Arrays.equals(e.getKey(), k));
+                            ownerKV.put(k, newVal);
+                            return true;
+                        }
+                        return false;
+                    }
                 }
         );
 

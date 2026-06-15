@@ -156,14 +156,19 @@ public final class AggFunctions {
         private final boolean distinct;
         private final StringBuilder sb = new StringBuilder();
         private boolean first = true;
+        private final Set<String> seen;
 
-        GroupConcatAgg(Expression arg, boolean distinct) { this.arg = arg; this.distinct = distinct; }
+        GroupConcatAgg(Expression arg, boolean distinct) {
+            this.arg = arg; this.distinct = distinct;
+            this.seen = distinct ? new HashSet<>() : null;
+        }
 
         @Override public Type type() { return Type.GROUP_CONCAT; }
         @Override public Expression arg() { return arg; }
         @Override public boolean distinct() { return distinct; }
         @Override public void update(Datum value) {
             if (value.isNull()) return;
+            if (distinct && !seen.add(value.toStringValue())) return;
             if (!first) sb.append(",");
             sb.append(value.toStringValue());
             first = false;

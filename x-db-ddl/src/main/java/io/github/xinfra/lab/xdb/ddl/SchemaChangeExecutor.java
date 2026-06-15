@@ -332,6 +332,97 @@ public class SchemaChangeExecutor {
     }
 
     /**
+     * Roll back a failed DDL job to ABSENT (for ADD operations) or restore to PUBLIC
+     * (for DROP operations), undoing any partially-applied schema changes.
+     */
+    public void rollback(DDLJob job, SchemaState failedAt) {
+        switch (job.getType()) {
+            case CREATE_DATABASE:
+            case DROP_DATABASE:
+            case CREATE_TABLE:
+            case TRUNCATE_TABLE:
+                break;
+
+            case ADD_COLUMN:
+                rollbackAddColumn(job);
+                break;
+            case ADD_INDEX:
+                rollbackAddIndex(job);
+                break;
+
+            case DROP_TABLE:
+                rollbackDropTable(job, failedAt);
+                break;
+            case DROP_COLUMN:
+                rollbackDropColumn(job, failedAt);
+                break;
+            case DROP_INDEX:
+                rollbackDropIndex(job, failedAt);
+                break;
+
+            default:
+                log.warn("No rollback handler for DDL type: {}", job.getType());
+        }
+    }
+
+    private void rollbackAddColumn(DDLJob job) {
+        TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
+        if (tableInfo == null) return;
+        ColumnInfo columnInfo = job.getColumnInfo();
+        List<ColumnInfo> columns = tableInfo.getColumns();
+        if (columns != null) {
+            columns.removeIf(c -> c.getName().equals(columnInfo.getName()));
+            tableInfo.setColumns(columns);
+            metaStore.updateTable(job.getDbId(), tableInfo);
+            metaStore.advanceSchemaVersion();
+            log.info("Rolled back ADD_COLUMN: removed column '{}' from table {}", columnInfo.getName(), job.getTableId());
+        }
+    }
+
+    private void rollbackAddIndex(DDLJob job) {
+        TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
+        if (tableInfo == null) return;
+        IndexInfo indexInfo = job.getIndexInfo();
+        List<IndexInfo> indices = tableInfo.getIndices();
+        if (indices != null) {
+            indices.removeIf(idx -> idx.getName().equals(indexInfo.getName()));
+            tableInfo.setIndices(indices);
+            metaStore.updateTable(job.getDbId(), tableInfo);
+            metaStore.advanceSchemaVersion();
+            log.info("Rolled back ADD_INDEX: removed index '{}' from table {}", indexInfo.getName(), job.getTableId());
+        }
+    }
+
+    private void rollbackDropTable(DDLJob job, SchemaState failedAt) {
+        TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
+        if (tableInfo == null) return;
+        tableInfo.setState(SchemaState.PUBLIC);
+        metaStore.updateTable(job.getDbId(), tableInfo);
+        metaStore.advanceSchemaVersion();
+        log.info("Rolled back DROP_TABLE: restored table {} to PUBLIC from {}", job.getTableId(), failedAt);
+    }
+
+    private void rollbackDropColumn(DDLJob job, SchemaState failedAt) {
+        TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
+        if (tableInfo == null) return;
+        ColumnInfo columnInfo = job.getColumnInfo();
+        updateColumnState(tableInfo, columnInfo.getName(), SchemaState.PUBLIC);
+        metaStore.updateTable(job.getDbId(), tableInfo);
+        metaStore.advanceSchemaVersion();
+        log.info("Rolled back DROP_COLUMN: restored column '{}' to PUBLIC from {}", columnInfo.getName(), failedAt);
+    }
+
+    private void rollbackDropIndex(DDLJob job, SchemaState failedAt) {
+        TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
+        if (tableInfo == null) return;
+        IndexInfo indexInfo = job.getIndexInfo();
+        updateIndexState(tableInfo, indexInfo.getName(), SchemaState.PUBLIC);
+        metaStore.updateTable(job.getDbId(), tableInfo);
+        metaStore.advanceSchemaVersion();
+        log.info("Rolled back DROP_INDEX: restored index '{}' to PUBLIC from {}", indexInfo.getName(), failedAt);
+    }
+
+    /**
      * Returns the next schema state in the F1 state machine for the given DDL type
      * and current state. Returns null if the current state is the final state.
      */

@@ -106,6 +106,40 @@ class OptimizeRuleTest {
         }
 
         @Test
+        @DisplayName("Constant predicate is not pushed into either side of a JOIN")
+        void constantPredicateNotPushedIntoJoin() {
+            // Build a plan manually: Selection(1=1) over Join(users, orders)
+            LogicalPlan left = buildPlan("SELECT * FROM users");
+            LogicalPlan right = buildPlan("SELECT * FROM orders");
+
+            // Unwrap to get the scans
+            LogicalTableScan leftScan = findNode(left, LogicalTableScan.class);
+            LogicalTableScan rightScan = findNode(right, LogicalTableScan.class);
+
+            LogicalJoin join = new LogicalJoin(leftScan, rightScan,
+                    JoinType.RIGHT,
+                    new BinaryOp(
+                            new ColumnRef("users", "id", 0, DataType.BIGINT),
+                            BinaryOp.Op.EQ,
+                            new ColumnRef("orders", "user_id", 0, DataType.BIGINT)));
+
+            // Constant predicate: 1 = 1
+            Expression constPred = new BinaryOp(
+                    new Constant(Datum.of(1L), DataType.INT),
+                    BinaryOp.Op.EQ,
+                    new Constant(Datum.of(1L), DataType.INT));
+            LogicalSelection sel = new LogicalSelection(join, List.of(constPred));
+
+            LogicalPlan optimized = rule.apply(sel);
+
+            // The constant predicate should NOT be pushed to the left side of a RIGHT JOIN.
+            // It should remain as a Selection above the Join.
+            LogicalSelection remainingSel = findNode(optimized, LogicalSelection.class);
+            assertThat(remainingSel).isNotNull();
+            assertThat(remainingSel.conditions()).hasSize(1);
+        }
+
+        @Test
         @DisplayName("Predicates not pushable past aggregation remain as Selection")
         void predicateAboveAggregation() {
             // HAVING clause produces a Selection above Aggregation; it should not be pushed

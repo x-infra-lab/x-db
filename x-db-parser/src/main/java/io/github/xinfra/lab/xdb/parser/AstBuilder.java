@@ -515,29 +515,55 @@ public class AstBuilder extends MySQLParserBaseVisitor<Object> {
 
     @Override
     public UpdateStmt visitUpdateStatement(MySQLParser.UpdateStatementContext ctx) {
-        String tableName = extractTableName(ctx.tableName());
+        TableRef tableRef = visitTableRefNode(ctx.tableRef());
+        String tableName = extractTargetTable(tableRef);
 
         List<Assignment> assignments = new ArrayList<>();
         for (MySQLParser.AssignmentContext ac : ctx.assignment()) {
-            String col = extractIdentifier(ac.columnName().identifier());
+            String col = extractIdentifier(ac.columnRef().columnName().identifier());
             ExprNode val = visitExpression(ac.expression());
             assignments.add(new Assignment(col, val));
         }
 
         ExprNode where = ctx.expression() != null ? visitExpression(ctx.expression()) : null;
-        return new UpdateStmt(tableName, assignments, where);
+        TableRef from = (tableRef instanceof TableRef.JoinTableRef) ? tableRef : null;
+        return new UpdateStmt(tableName, from, assignments, where);
     }
 
     @Override
-    public DeleteStmt visitDeleteStatement(MySQLParser.DeleteStatementContext ctx) {
+    public DeleteStmt visitDeleteMultiTable(MySQLParser.DeleteMultiTableContext ctx) {
+        String tableName = extractTableName(ctx.tableName());
+        TableRef from = visitTableRefNode(ctx.tableRef());
+        ExprNode where = ctx.expression() != null ? visitExpression(ctx.expression()) : null;
+        return new DeleteStmt(tableName, from, where);
+    }
+
+    @Override
+    public DeleteStmt visitDeleteSingleTable(MySQLParser.DeleteSingleTableContext ctx) {
         String tableName = extractTableName(ctx.tableName());
         ExprNode where = ctx.expression() != null ? visitExpression(ctx.expression()) : null;
         return new DeleteStmt(tableName, where);
     }
 
+    private String extractTargetTable(TableRef ref) {
+        if (ref instanceof TableRef.SimpleTableRef simple) {
+            return simple.getName();
+        }
+        if (ref instanceof TableRef.JoinTableRef join) {
+            return extractTargetTable(join.getLeft());
+        }
+        throw new RuntimeException("Cannot determine target table from table reference");
+    }
+
     // ================================================================
     // Utility
     // ================================================================
+
+    @Override
+    public AnalyzeTableStmt visitAnalyzeTableStatement(MySQLParser.AnalyzeTableStatementContext ctx) {
+        String tableName = extractTableName(ctx.tableName());
+        return new AnalyzeTableStmt(tableName);
+    }
 
     @Override
     public UseStmt visitUseStatement(MySQLParser.UseStatementContext ctx) {

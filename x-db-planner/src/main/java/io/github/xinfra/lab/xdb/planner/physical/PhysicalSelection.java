@@ -32,7 +32,7 @@ public class PhysicalSelection implements PhysicalPlan {
 
     @Override
     public String explain(int indent) {
-        return indentStr(indent) + "PhysicalSelection(" + conditions + ")\n" +
+        return indentStr(indent) + "PhysicalSelection(" + conditions + costInfo() + ")\n" +
                 child.explain(indent + 1);
     }
 }

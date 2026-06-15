@@ -101,7 +101,7 @@ public class PredicatePushdownRule implements OptimizeRule {
 
     private TableSide determineTableSide(Expression expr, LogicalJoin join) {
         List<String> tables = collectTableNames(expr);
-        if (tables.isEmpty()) return TableSide.LEFT;
+        if (tables.isEmpty()) return TableSide.BOTH;
         List<ColumnRef> leftCols = collectColumnRefs(join.left());
         List<ColumnRef> rightCols = collectColumnRefs(join.right());
         boolean matchesLeft = tables.stream().allMatch(t ->

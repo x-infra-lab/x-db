@@ -45,7 +45,7 @@ public class PhysicalProjection implements PhysicalPlan {
             sb.append(expressions.get(i).toSQL());
             if (i < aliases.size() && aliases.get(i) != null) sb.append(" AS ").append(aliases.get(i));
         }
-        sb.append(")\n").append(child.explain(indent + 1));
+        sb.append(costInfo()).append(")\n").append(child.explain(indent + 1));
         return sb.toString();
     }
 }

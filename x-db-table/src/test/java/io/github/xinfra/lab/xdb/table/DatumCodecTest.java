@@ -267,6 +267,27 @@ class DatumCodecTest {
             Datum decoded = DatumCodecTest.this.roundTrip(Datum.of(new BigDecimal("123456789.123456789")));
             assertThat(((Datum.DecimalDatum) decoded).value()).isEqualByComparingTo(new BigDecimal("123456789.123456789"));
         }
+
+        @Test
+        void integerPartExceeding40DigitsThrows() {
+            String huge = "1" + "0".repeat(40) + ".5";
+            assertThatThrownBy(() -> DatumCodec.encode(Datum.of(new BigDecimal(huge))))
+                    .hasMessageContaining("integer part exceeds 40 digits");
+        }
+
+        @Test
+        void fractionalPartExceeding20DigitsThrows() {
+            String precise = "1." + "1".repeat(21);
+            assertThatThrownBy(() -> DatumCodec.encode(Datum.of(new BigDecimal(precise))))
+                    .hasMessageContaining("fractional part exceeds 20 digits");
+        }
+
+        @Test
+        void exactlyAtLimitSucceeds() {
+            String intMax = "1".repeat(40) + "." + "2".repeat(20);
+            Datum decoded = DatumCodecTest.this.roundTrip(Datum.of(new BigDecimal(intMax)));
+            assertThat(((Datum.DecimalDatum) decoded).value()).isEqualByComparingTo(new BigDecimal(intMax));
+        }
     }
 
     // ==================== DateTime ====================

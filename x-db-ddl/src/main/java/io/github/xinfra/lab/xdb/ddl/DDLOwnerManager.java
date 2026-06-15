@@ -47,16 +47,15 @@ public class DDLOwnerManager {
     private volatile long leaseExpireTime;
 
     public DDLOwnerManager(String ownerId, KVGetter getter, KVPutter putter, CASOperation casOp) {
+        if (casOp == null) {
+            throw new IllegalArgumentException("CASOperation is required for safe DDL ownership");
+        }
         this.ownerId = ownerId;
         this.getter = getter;
         this.putter = putter;
         this.casOp = casOp;
         this.isOwner = false;
         this.leaseExpireTime = 0;
-    }
-
-    public DDLOwnerManager(String ownerId, KVGetter getter, KVPutter putter) {
-        this(ownerId, getter, putter, null);
     }
 
     /**
@@ -101,23 +100,14 @@ public class DDLOwnerManager {
         String newValue = ownerId + SEPARATOR + newExpireTs;
         byte[] newBytes = newValue.getBytes(StandardCharsets.UTF_8);
 
-        if (casOp != null) {
-            boolean success = casOp.cas(key, currentValue, newBytes);
-            if (success) {
-                this.isOwner = true;
-                this.leaseExpireTime = newExpireTs;
-                log.info("Became DDL owner: ownerId={}, leaseExpireTime={}", ownerId, newExpireTs);
-                return true;
-            }
-            return false;
-        } else {
-            // Fallback: simple put (no CAS support)
-            putter.put(key, newBytes);
+        boolean success = casOp.cas(key, currentValue, newBytes);
+        if (success) {
             this.isOwner = true;
             this.leaseExpireTime = newExpireTs;
-            log.info("Became DDL owner (no CAS): ownerId={}, leaseExpireTime={}", ownerId, newExpireTs);
+            log.info("Became DDL owner: ownerId={}, leaseExpireTime={}", ownerId, newExpireTs);
             return true;
         }
+        return false;
     }
 
     /**
@@ -148,21 +138,14 @@ public class DDLOwnerManager {
         String newValue = ownerId + SEPARATOR + newExpireTs;
         byte[] newBytes = newValue.getBytes(StandardCharsets.UTF_8);
 
-        if (casOp != null) {
-            boolean success = casOp.cas(key, currentValue, newBytes);
-            if (success) {
-                this.leaseExpireTime = newExpireTs;
-                log.debug("Renewed DDL owner lease: ownerId={}, leaseExpireTime={}", ownerId, newExpireTs);
-                return true;
-            }
-            isOwner = false;
-            return false;
-        } else {
-            putter.put(key, newBytes);
+        boolean success = casOp.cas(key, currentValue, newBytes);
+        if (success) {
             this.leaseExpireTime = newExpireTs;
-            log.debug("Renewed DDL owner lease (no CAS): ownerId={}, leaseExpireTime={}", ownerId, newExpireTs);
+            log.debug("Renewed DDL owner lease: ownerId={}, leaseExpireTime={}", ownerId, newExpireTs);
             return true;
         }
+        isOwner = false;
+        return false;
     }
 
     /**

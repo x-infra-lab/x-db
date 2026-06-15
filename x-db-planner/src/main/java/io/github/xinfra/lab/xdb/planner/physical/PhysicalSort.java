@@ -45,7 +45,7 @@ public class PhysicalSort implements PhysicalPlan {
             sb.append(orderByExprs.get(i).toSQL());
             sb.append(ascending.get(i) ? " ASC" : " DESC");
         }
-        sb.append(")\n").append(child.explain(indent + 1));
+        sb.append(costInfo()).append(")\n").append(child.explain(indent + 1));
         return sb.toString();
     }
 }

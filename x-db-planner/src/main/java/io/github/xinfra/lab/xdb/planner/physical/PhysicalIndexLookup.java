@@ -36,7 +36,7 @@ public class PhysicalIndexLookup implements PhysicalPlan {
 
     @Override
     public String explain(int indent) {
-        return indentStr(indent) + "PhysicalIndexLookup(" + table.getName() + ")\n" +
+        return indentStr(indent) + "PhysicalIndexLookup(" + table.getName() + costInfo() + ")\n" +
                 indexScan.explain(indent + 1);
     }
 }

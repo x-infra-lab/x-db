@@ -1,5 +1,7 @@
 package io.github.xinfra.lab.xdb.expression;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
+
 public final class BinaryOp implements Expression {
     public enum Op {
         ADD, SUB, MUL, DIV, MOD, INT_DIV,
@@ -58,35 +60,42 @@ public final class BinaryOp implements Expression {
             return Datum.of(result ? 1L : 0L);
         }
 
-        return switch (op) {
-            case ADD -> addDatum(lv, rv);
-            case SUB -> subDatum(lv, rv);
-            case MUL -> mulDatum(lv, rv);
-            case DIV -> divDatum(lv, rv);
-            case MOD -> modDatum(lv, rv);
-            case INT_DIV -> {
-                long d = rv.toLong();
-                yield d == 0 ? Datum.nil() : Datum.of(lv.toLong() / d);
-            }
-            default -> throw new UnsupportedOperationException("Unknown op: " + op);
-        };
+        try {
+            return switch (op) {
+                case ADD -> addDatum(lv, rv);
+                case SUB -> subDatum(lv, rv);
+                case MUL -> mulDatum(lv, rv);
+                case DIV -> divDatum(lv, rv);
+                case MOD -> modDatum(lv, rv);
+                case INT_DIV -> {
+                    long d = rv.toLong();
+                    if (d == 0) yield Datum.nil();
+                    long n = lv.toLong();
+                    if (n == Long.MIN_VALUE && d == -1) throw new ArithmeticException("long overflow");
+                    yield Datum.of(n / d);
+                }
+                default -> throw new UnsupportedOperationException("Unknown op: " + op);
+            };
+        } catch (ArithmeticException e) {
+            throw XDBException.dataOutOfRange("BIGINT value is out of range");
+        }
     }
 
     private Datum addDatum(Datum a, Datum b) {
         if (a instanceof Datum.IntDatum && b instanceof Datum.IntDatum)
-            return Datum.of(a.toLong() + b.toLong());
+            return Datum.of(Math.addExact(a.toLong(), b.toLong()));
         return Datum.of(a.toDouble() + b.toDouble());
     }
 
     private Datum subDatum(Datum a, Datum b) {
         if (a instanceof Datum.IntDatum && b instanceof Datum.IntDatum)
-            return Datum.of(a.toLong() - b.toLong());
+            return Datum.of(Math.subtractExact(a.toLong(), b.toLong()));
         return Datum.of(a.toDouble() - b.toDouble());
     }
 
     private Datum mulDatum(Datum a, Datum b) {
         if (a instanceof Datum.IntDatum && b instanceof Datum.IntDatum)
-            return Datum.of(a.toLong() * b.toLong());
+            return Datum.of(Math.multiplyExact(a.toLong(), b.toLong()));
         return Datum.of(a.toDouble() * b.toDouble());
     }
 

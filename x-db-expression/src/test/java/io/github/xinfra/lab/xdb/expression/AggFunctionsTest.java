@@ -365,6 +365,45 @@ class AggFunctionsTest {
             AggFunction agg = AggFunctions.create(AggFunction.Type.GROUP_CONCAT, null, false);
             assertThat(agg.returnType()).isEqualTo(DataType.VARCHAR);
         }
+
+        @Test
+        void distinctSkipsDuplicates() {
+            AggFunction agg = AggFunctions.create(AggFunction.Type.GROUP_CONCAT, null, true);
+            agg.update(Datum.of("a"));
+            agg.update(Datum.of("b"));
+            agg.update(Datum.of("a"));
+            agg.update(Datum.of("c"));
+            agg.update(Datum.of("b"));
+            assertThat(agg.result().toStringValue()).isEqualTo("a,b,c");
+        }
+
+        @Test
+        void distinctWithNulls() {
+            AggFunction agg = AggFunctions.create(AggFunction.Type.GROUP_CONCAT, null, true);
+            agg.update(Datum.of("x"));
+            agg.update(Datum.nil());
+            agg.update(Datum.of("x"));
+            agg.update(Datum.of("y"));
+            assertThat(agg.result().toStringValue()).isEqualTo("x,y");
+        }
+
+        @Test
+        void distinctAllSameValue() {
+            AggFunction agg = AggFunctions.create(AggFunction.Type.GROUP_CONCAT, null, true);
+            agg.update(Datum.of("dup"));
+            agg.update(Datum.of("dup"));
+            agg.update(Datum.of("dup"));
+            assertThat(agg.result().toStringValue()).isEqualTo("dup");
+        }
+
+        @Test
+        void nonDistinctKeepsDuplicates() {
+            AggFunction agg = AggFunctions.create(AggFunction.Type.GROUP_CONCAT, null, false);
+            agg.update(Datum.of("a"));
+            agg.update(Datum.of("a"));
+            agg.update(Datum.of("b"));
+            assertThat(agg.result().toStringValue()).isEqualTo("a,a,b");
+        }
     }
 
     @Test

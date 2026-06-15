@@ -15,6 +15,17 @@ public final class Constant implements Expression {
     @Override public DataType returnType() { return type; }
     @Override public String toString() { return value.toString(); }
 
+    public static Constant of(Datum d) {
+        if (d == null || d.isNull()) return ofNull();
+        if (d instanceof Datum.IntDatum) return new Constant(d, DataType.BIGINT);
+        if (d instanceof Datum.DoubleDatum) return new Constant(d, DataType.DOUBLE);
+        if (d instanceof Datum.DecimalDatum) return new Constant(d, DataType.DECIMAL);
+        if (d instanceof Datum.StringDatum) return new Constant(d, DataType.VARCHAR);
+        if (d instanceof Datum.BytesDatum) return new Constant(d, DataType.BLOB);
+        if (d instanceof Datum.DateTimeDatum) return new Constant(d, DataType.DATETIME);
+        return new Constant(d, DataType.VARCHAR);
+    }
+
     public static Constant ofNull() { return new Constant(Datum.nil(), DataType.NULL); }
     public static Constant ofLong(long v) { return new Constant(Datum.of(v), DataType.BIGINT); }
     public static Constant ofDouble(double v) { return new Constant(Datum.of(v), DataType.DOUBLE); }

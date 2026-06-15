@@ -1,5 +1,6 @@
 package io.github.xinfra.lab.xdb.session;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.ddl.DDLExecutor;
 import io.github.xinfra.lab.xdb.expression.DataType;
 import io.github.xinfra.lab.xdb.meta.ColumnInfo;
@@ -72,7 +73,7 @@ public class DDLHandler {
         } else if (stmt instanceof TruncateTableStmt s) {
             return handleTruncateTable(s, currentDatabase);
         } else {
-            throw new RuntimeException("Unsupported DDL statement: " + stmt.getClass().getSimpleName());
+            throw XDBException.internal("Unsupported DDL statement: " + stmt.getClass().getSimpleName());
         }
     }
 
@@ -87,7 +88,7 @@ public class DDLHandler {
             if (stmt.isIfNotExists()) {
                 return ExecuteResult.ok("Database already exists");
             }
-            throw new RuntimeException("Database '" + stmt.getName() + "' already exists");
+            throw XDBException.dbExists(stmt.getName());
         }
 
         long dbId = metaStore.allocGlobalId();
@@ -112,7 +113,7 @@ public class DDLHandler {
             if (stmt.isIfExists()) {
                 return ExecuteResult.ok("Database does not exist");
             }
-            throw new RuntimeException("Database '" + stmt.getName() + "' does not exist");
+            throw XDBException.badDatabase(stmt.getName());
         }
 
         ddlExecutor.executeDropDatabase(db.getId(), db.getName());
@@ -128,12 +129,12 @@ public class DDLHandler {
     private ExecuteResult handleCreateTable(CreateTableStmt stmt, String currentDatabase) {
         String dbName = currentDatabase;
         if (dbName == null) {
-            throw new RuntimeException("No database selected");
+            throw XDBException.noDatabase();
         }
         InfoSchema is = schemaHolder.get();
         DatabaseInfo db = is.getDatabase(dbName);
         if (db == null) {
-            throw new RuntimeException("Database '" + dbName + "' does not exist");
+            throw XDBException.badDatabase(dbName);
         }
 
         // Check for existing table
@@ -142,7 +143,7 @@ public class DDLHandler {
             if (stmt.isIfNotExists()) {
                 return ExecuteResult.ok("Table already exists");
             }
-            throw new RuntimeException("Table '" + stmt.getTableName() + "' already exists");
+            throw XDBException.tableExists(stmt.getTableName());
         }
 
         long tableId = metaStore.allocGlobalId();
@@ -268,7 +269,7 @@ public class DDLHandler {
                 return col;
             }
         }
-        throw new RuntimeException("Column '" + name + "' not found");
+        throw XDBException.badField(name);
     }
 
     // ---------------------------------------------------------------
@@ -278,12 +279,12 @@ public class DDLHandler {
     private ExecuteResult handleDropTable(DropTableStmt stmt, String currentDatabase) {
         String dbName = currentDatabase;
         if (dbName == null) {
-            throw new RuntimeException("No database selected");
+            throw XDBException.noDatabase();
         }
         InfoSchema is = schemaHolder.get();
         DatabaseInfo db = is.getDatabase(dbName);
         if (db == null) {
-            throw new RuntimeException("Database '" + dbName + "' does not exist");
+            throw XDBException.badDatabase(dbName);
         }
 
         TableInfo table = is.getTable(dbName, stmt.getTableName());
@@ -291,7 +292,7 @@ public class DDLHandler {
             if (stmt.isIfExists()) {
                 return ExecuteResult.ok("Table does not exist");
             }
-            throw new RuntimeException("Table '" + stmt.getTableName() + "' does not exist");
+            throw XDBException.tableNotFound(stmt.getTableName());
         }
 
         ddlExecutor.executeDropTable(db.getId(), table.getId(), table.getName());
@@ -307,16 +308,16 @@ public class DDLHandler {
     private ExecuteResult handleAlterTable(AlterTableStmt stmt, String currentDatabase) {
         String dbName = currentDatabase;
         if (dbName == null) {
-            throw new RuntimeException("No database selected");
+            throw XDBException.noDatabase();
         }
         InfoSchema is = schemaHolder.get();
         DatabaseInfo db = is.getDatabase(dbName);
         if (db == null) {
-            throw new RuntimeException("Database '" + dbName + "' does not exist");
+            throw XDBException.badDatabase(dbName);
         }
         TableInfo table = is.getTable(dbName, stmt.getTableName());
         if (table == null) {
-            throw new RuntimeException("Table '" + stmt.getTableName() + "' does not exist");
+            throw XDBException.tableNotFound(stmt.getTableName());
         }
 
         for (AlterSpec spec : stmt.getSpecs()) {
@@ -333,7 +334,7 @@ public class DDLHandler {
                 for (io.github.xinfra.lab.xdb.parser.ast.IndexColumn ic : addIdx.getColumns()) {
                     ColumnInfo col = table.getColumn(ic.getColumnName());
                     if (col == null) {
-                        throw new RuntimeException("Column '" + ic.getColumnName() + "' not found");
+                        throw XDBException.badField(ic.getColumnName());
                     }
                     int length = ic.getLength() != null ? ic.getLength() : 0;
                     idxCols.add(new IndexColumn(ic.getColumnName(), col.getId(), length));
@@ -345,7 +346,7 @@ public class DDLHandler {
             } else if (spec instanceof AlterSpec.DropIndex dropIdx) {
                 ddlExecutor.executeDropIndex(db.getId(), table.getId(), dropIdx.getIndexName());
             } else {
-                throw new RuntimeException("Unsupported ALTER spec: " + spec.getClass().getSimpleName());
+                throw XDBException.internal("Unsupported ALTER spec: " + spec.getClass().getSimpleName());
             }
         }
 
@@ -361,16 +362,16 @@ public class DDLHandler {
     private ExecuteResult handleTruncateTable(TruncateTableStmt stmt, String currentDatabase) {
         String dbName = currentDatabase;
         if (dbName == null) {
-            throw new RuntimeException("No database selected");
+            throw XDBException.noDatabase();
         }
         InfoSchema is = schemaHolder.get();
         DatabaseInfo db = is.getDatabase(dbName);
         if (db == null) {
-            throw new RuntimeException("Database '" + dbName + "' does not exist");
+            throw XDBException.badDatabase(dbName);
         }
         TableInfo table = is.getTable(dbName, stmt.getTableName());
         if (table == null) {
-            throw new RuntimeException("Table '" + stmt.getTableName() + "' does not exist");
+            throw XDBException.tableNotFound(stmt.getTableName());
         }
 
         ddlExecutor.executeTruncateTable(db.getId(), table.getId(), table.getName());

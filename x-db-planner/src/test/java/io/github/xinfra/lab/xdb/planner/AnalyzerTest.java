@@ -253,11 +253,11 @@ class AnalyzerTest {
         }
 
         @Test
-        @DisplayName("SELECT from non-existent table throws RuntimeException")
+        @DisplayName("SELECT from non-existent table throws XDBException")
         void selectFromNonExistentTable() {
             assertThatThrownBy(() -> analyze("SELECT * FROM nonexistent"))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("Table not found");
+                    .isInstanceOf(io.github.xinfra.lab.xdb.common.XDBException.class)
+                    .hasMessageContaining("doesn't exist");
         }
 
         @Test
@@ -339,12 +339,12 @@ class AnalyzerTest {
         }
 
         @Test
-        @DisplayName("INSERT with non-existent column throws RuntimeException")
+        @DisplayName("INSERT with non-existent column throws XDBException")
         void insertWithBadColumn() {
             assertThatThrownBy(() -> analyze(
                     "INSERT INTO users (nonexistent) VALUES ('val')"))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("Column not found");
+                    .isInstanceOf(io.github.xinfra.lab.xdb.common.XDBException.class)
+                    .hasMessageContaining("Unknown column");
         }
     }
 
@@ -498,8 +498,8 @@ class AnalyzerTest {
             Analyzer noDB = new Analyzer(infoSchema, null);
             Statement stmt = SQLParser.parse("SELECT * FROM users");
             assertThatThrownBy(() -> noDB.analyze(stmt))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("No database selected");
+                    .isInstanceOf(io.github.xinfra.lab.xdb.common.XDBException.class)
+                    .hasMessageContaining("No database");
         }
 
         @Test

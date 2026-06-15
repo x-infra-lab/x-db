@@ -1,6 +1,7 @@
 package io.github.xinfra.lab.xdb.table;
 
 import io.github.xinfra.lab.xdb.common.Codec;
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.expression.Datum;
 
 import java.math.BigDecimal;
@@ -78,8 +79,14 @@ public final class DatumCodec {
         String fracPart = dotPos >= 0 ? plain.substring(dotPos + 1) : "";
         while (intPart.length() < DECIMAL_INT_WIDTH) intPart = "0" + intPart;
         while (fracPart.length() < DECIMAL_FRAC_WIDTH) fracPart = fracPart + "0";
-        if (intPart.length() > DECIMAL_INT_WIDTH) intPart = intPart.substring(intPart.length() - DECIMAL_INT_WIDTH);
-        if (fracPart.length() > DECIMAL_FRAC_WIDTH) fracPart = fracPart.substring(0, DECIMAL_FRAC_WIDTH);
+        if (intPart.length() > DECIMAL_INT_WIDTH) {
+            throw XDBException.dataOutOfRange(
+                    "DECIMAL integer part exceeds " + DECIMAL_INT_WIDTH + " digits");
+        }
+        if (fracPart.length() > DECIMAL_FRAC_WIDTH) {
+            throw XDBException.dataOutOfRange(
+                    "DECIMAL fractional part exceeds " + DECIMAL_FRAC_WIDTH + " digits");
+        }
         String digits = intPart + fracPart;
         byte[] result = new byte[1 + digits.length()];
         if (sign > 0) {

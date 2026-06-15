@@ -1,5 +1,6 @@
 package io.github.xinfra.lab.xdb.session;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.executor.TransactionContext;
 import io.github.xinfra.lab.xdb.expression.EvalContext;
 import org.slf4j.Logger;
@@ -7,6 +8,10 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Manages the transaction lifecycle for a single {@link Session}.
+ * <p>
+ * All public methods are {@code synchronized} to guard against concurrent
+ * access from the query-execution thread and the server-shutdown thread
+ * (which calls {@link Session#close()}).
  * <p>
  * Transaction operations are decoupled from the concrete KV client through
  * functional interfaces so that the session module does not depend on
@@ -16,20 +21,8 @@ public class TransactionManager {
 
     private static final Logger log = LoggerFactory.getLogger(TransactionManager.class);
 
-    // ---------------------------------------------------------------
-    // Functional interfaces that bridge to the actual KV client.
-    // The {@code Object txn} parameter is the opaque KV transaction
-    // handle (e.g. {@code Transaction} from x-kv).
-    // ---------------------------------------------------------------
-
     @FunctionalInterface
     public interface TxnStarter {
-        /**
-         * Begin a new KV transaction.
-         *
-         * @param pessimistic {@code true} for pessimistic mode
-         * @return opaque transaction handle
-         */
         Object beginTxn(boolean pessimistic) throws Exception;
     }
 
@@ -45,15 +38,8 @@ public class TransactionManager {
 
     @FunctionalInterface
     public interface TxnContextFactory {
-        /**
-         * Create a {@link TransactionContext} from the opaque transaction handle.
-         */
         TransactionContext createContext(Object txn, EvalContext evalContext);
     }
-
-    // ---------------------------------------------------------------
-    // State
-    // ---------------------------------------------------------------
 
     private final TxnStarter starter;
     private final TxnCommitter committer;
@@ -63,6 +49,8 @@ public class TransactionManager {
     private Object currentTxn;
     private TransactionContext currentContext;
     private boolean active;
+    private long txnStartTimeNanos;
+    private long txnTimeoutMs = 60_000;
 
     public TransactionManager(TxnStarter starter,
                               TxnCommitter committer,
@@ -74,38 +62,31 @@ public class TransactionManager {
         this.contextFactory = contextFactory;
     }
 
-    // ---------------------------------------------------------------
-    // Public API
-    // ---------------------------------------------------------------
+    public synchronized void setTxnTimeout(long timeoutMs) {
+        this.txnTimeoutMs = timeoutMs;
+    }
 
-    /**
-     * Begin a transaction if one is not already active.
-     *
-     * @param pessimistic whether to use pessimistic locking
-     * @return the {@link TransactionContext} for the (possibly new) transaction
-     */
-    public TransactionContext beginIfNeeded(boolean pessimistic) {
-        if (!active) {
+    public synchronized long getTxnTimeout() {
+        return txnTimeoutMs;
+    }
+
+    public synchronized TransactionContext beginIfNeeded(boolean pessimistic) {
+        if (active) {
+            checkTimeout();
+        } else {
             begin(pessimistic);
         }
         return currentContext;
     }
 
-    /**
-     * Explicitly begin a new transaction.
-     *
-     * @param pessimistic whether to use pessimistic locking
-     * @throws IllegalStateException if a transaction is already active
-     */
-    public void begin(boolean pessimistic) {
+    public synchronized void begin(boolean pessimistic) {
         if (active) {
-            // Implicitly commit the current transaction before starting a new one,
-            // matching MySQL behaviour for nested BEGIN.
             commit();
         }
         try {
             this.currentTxn = starter.beginTxn(pessimistic);
             this.currentContext = contextFactory.createContext(currentTxn, new EvalContext());
+            this.txnStartTimeNanos = System.nanoTime();
             this.active = true;
             log.debug("Transaction started (pessimistic={})", pessimistic);
         } catch (Exception e) {
@@ -113,12 +94,7 @@ public class TransactionManager {
         }
     }
 
-    /**
-     * Commit the current transaction.
-     *
-     * @throws IllegalStateException if no transaction is active
-     */
-    public void commit() {
+    public synchronized void commit() {
         if (!active) {
             throw new IllegalStateException("No active transaction to commit");
         }
@@ -132,12 +108,7 @@ public class TransactionManager {
         }
     }
 
-    /**
-     * Rollback the current transaction.
-     *
-     * @throws IllegalStateException if no transaction is active
-     */
-    public void rollback() {
+    public synchronized void rollback() {
         if (!active) {
             throw new IllegalStateException("No active transaction to rollback");
         }
@@ -151,11 +122,7 @@ public class TransactionManager {
         }
     }
 
-    /**
-     * Rollback the current transaction silently (used during error recovery).
-     * Does nothing if no transaction is active.
-     */
-    public void rollbackQuietly() {
+    public synchronized void rollbackQuietly() {
         if (!active) {
             return;
         }
@@ -169,24 +136,25 @@ public class TransactionManager {
         }
     }
 
-    /**
-     * Return whether a transaction is currently active.
-     */
-    public boolean isActive() {
+    public synchronized boolean isActive() {
         return active;
     }
 
-    /**
-     * Return the {@link TransactionContext} for the current transaction,
-     * or {@code null} if none is active.
-     */
-    public TransactionContext currentContext() {
+    public synchronized TransactionContext currentContext() {
+        checkTimeout();
         return currentContext;
     }
 
-    // ---------------------------------------------------------------
-    // Internal
-    // ---------------------------------------------------------------
+    private void checkTimeout() {
+        if (active && txnTimeoutMs > 0) {
+            long elapsedMs = (System.nanoTime() - txnStartTimeNanos) / 1_000_000;
+            if (elapsedMs > txnTimeoutMs) {
+                log.warn("Transaction timed out after {}ms (limit: {}ms)", elapsedMs, txnTimeoutMs);
+                rollbackQuietly();
+                throw XDBException.txnTimeout(elapsedMs, txnTimeoutMs);
+            }
+        }
+    }
 
     private void reset() {
         this.currentTxn = null;

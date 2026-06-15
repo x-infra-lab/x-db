@@ -6,6 +6,7 @@ options { caseInsensitive = true; }
 ADD:            'ADD';
 ALL:            'ALL';
 ALTER:          'ALTER';
+ANALYZE:        'ANALYZE';
 AND:            'AND';
 AS:             'AS';
 ASC:            'ASC';

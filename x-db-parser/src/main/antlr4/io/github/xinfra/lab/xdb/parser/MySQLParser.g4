@@ -43,6 +43,11 @@ utilityStatement
     | rollbackStatement
     | setStatement
     | describeStatement
+    | analyzeTableStatement
+    ;
+
+analyzeTableStatement
+    : ANALYZE TABLE tableName
     ;
 
 // ============================================================
@@ -234,16 +239,17 @@ valueRow
     ;
 
 updateStatement
-    : UPDATE tableName SET assignment (COMMA assignment)*
+    : UPDATE tableRef SET assignment (COMMA assignment)*
       (WHERE expression)?
     ;
 
 assignment
-    : columnName EQ expression
+    : columnRef EQ expression
     ;
 
 deleteStatement
-    : DELETE FROM tableName (WHERE expression)?
+    : DELETE tableName FROM tableRef (WHERE expression)?   # deleteMultiTable
+    | DELETE FROM tableName (WHERE expression)?             # deleteSingleTable
     ;
 
 // ============================================================

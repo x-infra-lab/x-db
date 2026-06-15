@@ -5,6 +5,8 @@ import io.github.xinfra.lab.xdb.session.SessionManager;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,17 +35,35 @@ public class AuthenticationHandler extends ChannelInboundHandlerAdapter {
     private final SessionManager sessionManager;
     private final int maxConnections;
     private final EventExecutorGroup queryExecutorGroup;
+    private final byte[] passwordDoubleHash;
+    private final SslContext sslContext;
+    private byte[] scramble;
     private boolean authenticated = false;
+    private boolean sslRequested = false;
 
     public AuthenticationHandler(SessionManager sessionManager) {
-        this(sessionManager, 0, null);
+        this(sessionManager, 0, null, "", null);
     }
 
     public AuthenticationHandler(SessionManager sessionManager, int maxConnections,
                                  EventExecutorGroup queryExecutorGroup) {
+        this(sessionManager, maxConnections, queryExecutorGroup, "", null);
+    }
+
+    public AuthenticationHandler(SessionManager sessionManager, int maxConnections,
+                                 EventExecutorGroup queryExecutorGroup, String rootPassword) {
+        this(sessionManager, maxConnections, queryExecutorGroup, rootPassword, null);
+    }
+
+    public AuthenticationHandler(SessionManager sessionManager, int maxConnections,
+                                 EventExecutorGroup queryExecutorGroup, String rootPassword,
+                                 SslContext sslContext) {
         this.sessionManager = sessionManager;
         this.maxConnections = maxConnections;
         this.queryExecutorGroup = queryExecutorGroup;
+        this.passwordDoubleHash = MySQLNativePasswordAuth.hashPassword(
+                rootPassword != null ? rootPassword : "");
+        this.sslContext = sslContext;
     }
 
     @Override
@@ -80,15 +100,24 @@ public class AuthenticationHandler extends ChannelInboundHandlerAdapter {
     private void sendHandshake(ChannelHandlerContext ctx) {
         int connectionId = connectionIdGenerator.incrementAndGet();
 
-        // Generate 20 bytes of random auth-plugin-data.
+        // Generate 20 bytes of random auth-plugin-data (scramble).
+        // Use range 1-127 to avoid NUL (0x00) and high bytes (0x80-0xFF)
+        // that get corrupted when MySQL Connector/J processes them through ASCII encoding.
         byte[] authData = new byte[20];
-        ThreadLocalRandom.current().nextBytes(authData);
+        for (int i = 0; i < authData.length; i++) {
+            authData[i] = (byte) (ThreadLocalRandom.current().nextInt(126) + 1);
+        }
+        this.scramble = authData;
 
         int serverCapabilities = MySQLConstants.CLIENT_LONG_PASSWORD
                 | MySQLConstants.CLIENT_PROTOCOL_41
                 | MySQLConstants.CLIENT_SECURE_CONNECTION
                 | MySQLConstants.CLIENT_PLUGIN_AUTH
                 | MySQLConstants.CLIENT_CONNECT_WITH_DB;
+
+        if (sslContext != null) {
+            serverCapabilities |= MySQLConstants.CLIENT_SSL;
+        }
 
         ByteBuf payload = ctx.alloc().buffer();
 
@@ -147,6 +176,18 @@ public class AuthenticationHandler extends ChannelInboundHandlerAdapter {
         // Parse client capabilities (4 bytes)
         int clientCapabilities = payload.readIntLE();
 
+        // Check for SSL Request: CLIENT_SSL set and this is the initial (pre-TLS) request.
+        // An SSL Request is exactly 32 bytes: capabilities[4] + max_packet[4] + charset[1] + reserved[23].
+        // After reading capabilities (4 bytes), there are 28 bytes remaining for an SSL Request.
+        if (!sslRequested && sslContext != null
+                && (clientCapabilities & MySQLConstants.CLIENT_SSL) != 0) {
+            payload.skipBytes(28); // max_packet[4] + charset[1] + reserved[23]
+            sslRequested = true;
+            SslHandler sslHandler = sslContext.newHandler(ctx.alloc());
+            ctx.pipeline().addFirst("ssl", sslHandler);
+            return;
+        }
+
         // Max packet size (4 bytes)
         payload.readIntLE();
 
@@ -160,10 +201,12 @@ public class AuthenticationHandler extends ChannelInboundHandlerAdapter {
         String username = readNullTermString(payload);
 
         // Auth response
+        byte[] authResponseBytes = null;
         if ((clientCapabilities & MySQLConstants.CLIENT_SECURE_CONNECTION) != 0) {
             int authLen = payload.readByte() & 0xFF;
             if (authLen > 0) {
-                payload.skipBytes(authLen);
+                authResponseBytes = new byte[authLen];
+                payload.readBytes(authResponseBytes);
             }
         }
 
@@ -174,10 +217,26 @@ public class AuthenticationHandler extends ChannelInboundHandlerAdapter {
             database = readNullTermString(payload);
         }
 
-        log.info("Client connected: user={}, database={}", username, database);
+        log.info("Client authentication attempt: user={}, database={}", username, database);
 
-        // Accept all connections for now (no password verification).
-        authenticated = true;
+        // Verify credentials using mysql_native_password
+        if (authResponseBytes == null || authResponseBytes.length == 0) {
+            authenticated = MySQLNativePasswordAuth.isEmptyPassword(passwordDoubleHash);
+        } else {
+            authenticated = MySQLNativePasswordAuth.verify(scramble, authResponseBytes, passwordDoubleHash);
+        }
+
+        if (!authenticated) {
+            log.warn("Authentication failed for user '{}'", username);
+            MySQLPacketEncoder encoder = ctx.pipeline().get(MySQLPacketEncoder.class);
+            if (encoder != null) {
+                encoder.setSequenceId(2);
+            }
+            ByteBuf err = MySQLPacketWriter.writeERR(ctx.alloc(), 1045, "28000",
+                    "Access denied for user '" + username + "'");
+            ctx.writeAndFlush(err).addListener(f -> ctx.close());
+            return;
+        }
 
         // Enforce max connections
         if (maxConnections > 0 && sessionManager instanceof io.github.xinfra.lab.xdb.session.SessionManagerImpl impl
