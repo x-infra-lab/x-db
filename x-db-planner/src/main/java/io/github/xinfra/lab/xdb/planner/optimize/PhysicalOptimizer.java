@@ -62,6 +62,13 @@ public class PhysicalOptimizer {
             return new PhysicalShowStmt(show.showType(), show.databaseName(),
                     show.tableName(), show.outputSchema());
         }
+        if (plan instanceof LogicalUnion union) {
+            List<PhysicalPlan> children = new ArrayList<>();
+            for (LogicalPlan child : union.inputs()) {
+                children.add(convert(child));
+            }
+            return new PhysicalUnion(children, union.isAll(), union.outputSchema());
+        }
         throw new UnsupportedOperationException("Cannot convert plan: " + plan.getClass().getSimpleName());
     }
 

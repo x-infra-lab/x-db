@@ -25,6 +25,7 @@ ddlStatement
     | dropTableStatement
     | alterTableStatement
     | truncateTableStatement
+    | createIndexStatement
     ;
 
 dmlStatement
@@ -178,11 +179,19 @@ truncateTableStatement
     : TRUNCATE TABLE? tableName
     ;
 
+createIndexStatement
+    : CREATE INDEX indexName ON tableName LPAREN indexColumnList RPAREN
+    ;
+
 // ============================================================
 // DML statements
 // ============================================================
 
 selectStatement
+    : selectBody (UNION ALL? selectBody)*
+    ;
+
+selectBody
     : SELECT (ALL | DISTINCT)? selectItem (COMMA selectItem)*
       (FROM tableRef (COMMA tableRef)*)?
       (WHERE whereExpr=expression)?

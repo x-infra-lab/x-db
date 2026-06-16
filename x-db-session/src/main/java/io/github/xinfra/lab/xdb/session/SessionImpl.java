@@ -36,6 +36,7 @@ import io.github.xinfra.lab.xdb.parser.ast.SetStmt;
 import io.github.xinfra.lab.xdb.parser.ast.ShowStmt;
 import io.github.xinfra.lab.xdb.parser.ast.Statement;
 import io.github.xinfra.lab.xdb.parser.ast.TruncateTableStmt;
+import io.github.xinfra.lab.xdb.parser.ast.UnionStmt;
 import io.github.xinfra.lab.xdb.parser.ast.UpdateStmt;
 import io.github.xinfra.lab.xdb.parser.ast.UseStmt;
 import io.github.xinfra.lab.xdb.planner.Planner;
@@ -476,7 +477,7 @@ public class SessionImpl implements Session {
     // ---------------------------------------------------------------
 
     private ExecuteResult handleDMLOrQuery(Statement stmt) throws Exception {
-        boolean isQuery = stmt instanceof SelectStmt || stmt instanceof ShowStmt;
+        boolean isQuery = stmt instanceof SelectStmt || stmt instanceof UnionStmt || stmt instanceof ShowStmt;
         boolean autoCommitTxn = false;
 
         // Ensure a transaction is active

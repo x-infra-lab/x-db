@@ -24,6 +24,7 @@ public class Analyzer {
 
     public LogicalPlan analyze(Statement stmt) {
         if (stmt instanceof SelectStmt sel) return analyzeSelect(sel);
+        if (stmt instanceof UnionStmt union) return analyzeUnion(union);
         if (stmt instanceof InsertStmt ins) return analyzeInsert(ins);
         if (stmt instanceof UpdateStmt upd) return analyzeUpdate(upd);
         if (stmt instanceof DeleteStmt del) return analyzeDelete(del);
@@ -31,6 +32,30 @@ public class Analyzer {
         if (stmt instanceof DescribeStmt desc) return analyzeDescribe(desc);
         if (stmt instanceof ExplainStmt explain) return analyzeExplain(explain);
         throw new UnsupportedOperationException("Cannot analyze: " + stmt.getClass().getSimpleName());
+    }
+
+    private LogicalPlan analyzeUnion(UnionStmt stmt) {
+        List<LogicalPlan> children = new ArrayList<>();
+        for (SelectStmt sel : stmt.getSelects()) {
+            children.add(analyzeSelect(sel));
+        }
+
+        int columnCount = children.get(0).outputSchema().size();
+        for (int i = 1; i < children.size(); i++) {
+            if (children.get(i).outputSchema().size() != columnCount) {
+                throw XDBException.internal(
+                        "Each UNION query must have the same number of columns");
+            }
+        }
+
+        List<ColumnInfo> outputCols = new ArrayList<>(children.get(0).outputSchema());
+
+        boolean all = true;
+        for (Boolean isAll : stmt.getUnionAll()) {
+            if (!isAll) { all = false; break; }
+        }
+
+        return new LogicalUnion(children, all, outputCols);
     }
 
     private LogicalPlan analyzeSelect(SelectStmt stmt) {

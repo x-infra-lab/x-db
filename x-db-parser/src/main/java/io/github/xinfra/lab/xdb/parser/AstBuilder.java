@@ -364,7 +364,31 @@ public class AstBuilder extends MySQLParserBaseVisitor<Object> {
     // ================================================================
 
     @Override
-    public SelectStmt visitSelectStatement(MySQLParser.SelectStatementContext ctx) {
+    public Statement visitSelectStatement(MySQLParser.SelectStatementContext ctx) {
+        List<MySQLParser.SelectBodyContext> bodies = ctx.selectBody();
+        if (bodies.size() == 1) {
+            return visitSelectBody(bodies.get(0));
+        }
+        List<SelectStmt> selects = new ArrayList<>();
+        for (MySQLParser.SelectBodyContext body : bodies) {
+            selects.add(visitSelectBody(body));
+        }
+        List<Boolean> unionAll = new ArrayList<>();
+        List<org.antlr.v4.runtime.tree.TerminalNode> allNodes = ctx.ALL();
+        int allIdx = 0;
+        for (int i = 0; i < bodies.size() - 1; i++) {
+            int unionTokenIndex = ctx.UNION(i).getSymbol().getTokenIndex();
+            boolean isAll = allIdx < allNodes.size()
+                    && allNodes.get(allIdx).getSymbol().getTokenIndex() > unionTokenIndex
+                    && (i + 1 >= bodies.size() - 1 || allNodes.get(allIdx).getSymbol().getTokenIndex()
+                        < ctx.UNION(i + 1).getSymbol().getTokenIndex());
+            if (isAll) allIdx++;
+            unionAll.add(isAll);
+        }
+        return new UnionStmt(selects, unionAll);
+    }
+
+    public SelectStmt visitSelectBody(MySQLParser.SelectBodyContext ctx) {
         SelectStmt.Builder builder = SelectStmt.builder();
 
         // DISTINCT
@@ -487,7 +511,7 @@ public class AstBuilder extends MySQLParserBaseVisitor<Object> {
 
     @Override
     public TableRef visitSubqueryTable(MySQLParser.SubqueryTableContext ctx) {
-        SelectStmt query = visitSelectStatement(ctx.selectStatement());
+        SelectStmt query = asSelectStmt(visitSelectStatement(ctx.selectStatement()));
         String alias = extractIdentifier(ctx.identifier());
         return new TableRef.SubqueryTableRef(query, alias);
     }
@@ -607,7 +631,7 @@ public class AstBuilder extends MySQLParserBaseVisitor<Object> {
 
     @Override
     public ExplainStmt visitExplainStatement(MySQLParser.ExplainStatementContext ctx) {
-        SelectStmt select = visitSelectStatement(ctx.selectStatement());
+        Statement select = visitSelectStatement(ctx.selectStatement());
         return new ExplainStmt(select);
     }
 
@@ -762,7 +786,7 @@ public class AstBuilder extends MySQLParserBaseVisitor<Object> {
 
         if (ctx.selectStatement() != null) {
             // IN (subquery)
-            SelectStmt subquery = visitSelectStatement(ctx.selectStatement());
+            SelectStmt subquery = asSelectStmt(visitSelectStatement(ctx.selectStatement()));
             List<ExprNode> values = new ArrayList<>();
             values.add(new SubqueryExpr(subquery));
             return new InExpr(expr, values, not);
@@ -787,7 +811,7 @@ public class AstBuilder extends MySQLParserBaseVisitor<Object> {
 
     @Override
     public ExprNode visitExistsExpr(MySQLParser.ExistsExprContext ctx) {
-        SelectStmt subquery = visitSelectStatement(ctx.selectStatement());
+        SelectStmt subquery = asSelectStmt(visitSelectStatement(ctx.selectStatement()));
         return new ExistsExpr(subquery);
     }
 
@@ -826,7 +850,7 @@ public class AstBuilder extends MySQLParserBaseVisitor<Object> {
 
     @Override
     public ExprNode visitSubqueryPrimary(MySQLParser.SubqueryPrimaryContext ctx) {
-        SelectStmt query = visitSelectStatement(ctx.selectStatement());
+        SelectStmt query = asSelectStmt(visitSelectStatement(ctx.selectStatement()));
         return new SubqueryExpr(query);
     }
 
@@ -940,6 +964,20 @@ public class AstBuilder extends MySQLParserBaseVisitor<Object> {
     // ================================================================
     // Helpers
     // ================================================================
+
+    public AlterTableStmt visitCreateIndexStatement(MySQLParser.CreateIndexStatementContext ctx) {
+        String indexName = extractIdentifier(ctx.indexName().identifier());
+        String tableName = extractTableName(ctx.tableName());
+        List<IndexColumn> cols = visitIndexColumnList(ctx.indexColumnList());
+        List<AlterSpec> specs = new ArrayList<>();
+        specs.add(new AlterSpec.AddIndex(indexName, cols));
+        return new AlterTableStmt(tableName, specs);
+    }
+
+    private SelectStmt asSelectStmt(Statement stmt) {
+        if (stmt instanceof SelectStmt sel) return sel;
+        throw new ParseException("Subquery cannot contain UNION; use a derived table instead");
+    }
 
     private String extractIdentifier(MySQLParser.IdentifierContext ctx) {
         if (ctx.BACKTICK_IDENTIFIER() != null) {
