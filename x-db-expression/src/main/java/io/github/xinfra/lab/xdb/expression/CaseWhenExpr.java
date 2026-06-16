@@ -15,6 +15,10 @@ public final class CaseWhenExpr implements Expression {
         this.elseExpr = elseExpr;
     }
 
+    public Expression compareExpr() { return compareExpr; }
+    public List<WhenClause> whenClauses() { return whenClauses; }
+    public Expression elseExpr() { return elseExpr; }
+
     @Override
     public Datum eval(EvalContext ctx, Row row) {
         if (compareExpr != null) {

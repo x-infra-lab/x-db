@@ -11,4 +11,10 @@ public interface AggFunction {
     Datum result();
     AggFunction newInstance();
     DataType returnType();
+
+    default long partialCount() { return 0; }
+    default java.math.BigDecimal partialSum() { return java.math.BigDecimal.ZERO; }
+
+    default void restorePartialState(long count, java.math.BigDecimal sum) {}
+    default boolean hasPartialValue() { return !result().isNull(); }
 }

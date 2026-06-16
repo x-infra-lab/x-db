@@ -11,6 +11,10 @@ public final class LikeExpr implements Expression {
         this.not = not;
     }
 
+    public Expression expr() { return expr; }
+    public Expression pattern() { return pattern; }
+    public boolean not() { return not; }
+
     @Override
     public Datum eval(EvalContext ctx, Row row) {
         Datum v = expr.eval(ctx, row);

@@ -19,6 +19,18 @@ public final class Row {
 
     public Row copy() { return new Row(Arrays.copyOf(values, values.length)); }
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Row other)) return false;
+        return Arrays.equals(values, other.values);
+    }
+
+    @Override
+    public int hashCode() {
+        return Arrays.hashCode(values);
+    }
+
     public long estimateMemoryBytes() {
         long size = 32 + (long) values.length * 8;
         for (Datum d : values) {

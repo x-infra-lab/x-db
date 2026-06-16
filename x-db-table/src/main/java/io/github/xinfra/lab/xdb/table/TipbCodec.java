@@ -1,0 +1,230 @@
+package io.github.xinfra.lab.xdb.table;
+
+import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
+import io.github.xinfra.lab.xdb.expression.AggFunction;
+import io.github.xinfra.lab.xdb.expression.BetweenExpr;
+import io.github.xinfra.lab.xdb.expression.BinaryOp;
+import io.github.xinfra.lab.xdb.expression.CaseWhenExpr;
+import io.github.xinfra.lab.xdb.expression.CastExpr;
+import io.github.xinfra.lab.xdb.expression.ColumnRef;
+import io.github.xinfra.lab.xdb.expression.Constant;
+import io.github.xinfra.lab.xdb.expression.Datum;
+import io.github.xinfra.lab.xdb.expression.Expression;
+import io.github.xinfra.lab.xdb.expression.FunctionCallExpr;
+import io.github.xinfra.lab.xdb.expression.InExpr;
+import io.github.xinfra.lab.xdb.expression.LikeExpr;
+import io.github.xinfra.lab.xdb.expression.UnaryOp;
+import io.github.xinfra.lab.xkv.proto.Tipb;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+
+public final class TipbCodec {
+    private TipbCodec() {}
+
+    // --- Expression → Tipb.Expr ---
+
+    public static Tipb.Expr encodeExpr(Expression expr) {
+        return switch (expr) {
+            case Constant c -> Tipb.Expr.newBuilder()
+                    .setTp(Tipb.ExprType.CONSTANT)
+                    .setVal(encodeDatum(c.value()))
+                    .setDataType(c.returnType().ordinal())
+                    .build();
+            case ColumnRef c -> Tipb.Expr.newBuilder()
+                    .setTp(Tipb.ExprType.COLUMN_REF)
+                    .setTableName(c.tableName() != null ? c.tableName() : "")
+                    .setColumnName(c.columnName())
+                    .setColumnIndex(c.index())
+                    .setDataType(c.returnType().ordinal())
+                    .build();
+            case BinaryOp b -> Tipb.Expr.newBuilder()
+                    .setTp(Tipb.ExprType.BINARY_OP)
+                    .setOp(b.op().ordinal())
+                    .addChildren(encodeExpr(b.left()))
+                    .addChildren(encodeExpr(b.right()))
+                    .build();
+            case UnaryOp u -> Tipb.Expr.newBuilder()
+                    .setTp(Tipb.ExprType.UNARY_OP)
+                    .setOp(u.op().ordinal())
+                    .addChildren(encodeExpr(u.operand()))
+                    .build();
+            case LikeExpr l -> Tipb.Expr.newBuilder()
+                    .setTp(Tipb.ExprType.LIKE)
+                    .setNot(l.not())
+                    .addChildren(encodeExpr(l.expr()))
+                    .addChildren(encodeExpr(l.pattern()))
+                    .build();
+            case InExpr i -> {
+                var b = Tipb.Expr.newBuilder()
+                        .setTp(Tipb.ExprType.IN)
+                        .setNot(i.not())
+                        .addChildren(encodeExpr(i.expr()));
+                for (Expression e : i.list()) b.addChildren(encodeExpr(e));
+                yield b.build();
+            }
+            case BetweenExpr be -> Tipb.Expr.newBuilder()
+                    .setTp(Tipb.ExprType.BETWEEN)
+                    .setNot(be.not())
+                    .addChildren(encodeExpr(be.expr()))
+                    .addChildren(encodeExpr(be.low()))
+                    .addChildren(encodeExpr(be.high()))
+                    .build();
+            case CastExpr c -> Tipb.Expr.newBuilder()
+                    .setTp(Tipb.ExprType.CAST)
+                    .setDataType(c.targetType().ordinal())
+                    .addChildren(encodeExpr(c.expr()))
+                    .build();
+            case CaseWhenExpr cw -> {
+                var b = Tipb.Expr.newBuilder().setTp(Tipb.ExprType.CASE_WHEN);
+                if (cw.compareExpr() != null) {
+                    b.setOp(1);
+                    b.addChildren(encodeExpr(cw.compareExpr()));
+                }
+                for (var wc : cw.whenClauses()) {
+                    b.addChildren(encodeExpr(wc.condition()));
+                    b.addChildren(encodeExpr(wc.result()));
+                }
+                if (cw.elseExpr() != null) {
+                    b.addChildren(encodeExpr(cw.elseExpr()));
+                }
+                yield b.build();
+            }
+            case FunctionCallExpr f -> {
+                var b = Tipb.Expr.newBuilder()
+                        .setTp(Tipb.ExprType.FUNCTION_CALL)
+                        .setFuncName(f.name());
+                for (Expression a : f.args()) b.addChildren(encodeExpr(a));
+                yield b.build();
+            }
+            default -> throw new IllegalArgumentException(
+                    "Unsupported expression: " + expr.getClass().getSimpleName());
+        };
+    }
+
+    // --- Datum → Tipb.Datum ---
+
+    public static Tipb.Datum encodeDatum(Datum datum) {
+        Tipb.Datum.Builder b = Tipb.Datum.newBuilder();
+        switch (datum) {
+            case Datum.IntDatum d -> b.setIntVal(d.value());
+            case Datum.DoubleDatum d -> b.setDoubleVal(d.value());
+            case Datum.DecimalDatum d -> b.setDecimalVal(d.value().toPlainString());
+            case Datum.StringDatum d -> b.setStringVal(d.value());
+            case Datum.BytesDatum d -> b.setBytesVal(ByteString.copyFrom(d.value()));
+            case Datum.DateTimeDatum d -> b.setDatetimeVal(
+                    d.value().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+            case Datum.NullDatum n -> b.setNullVal(true);
+        }
+        return b.build();
+    }
+
+    // --- Tipb.Datum → Datum ---
+
+    public static Datum decodeDatum(Tipb.Datum proto) {
+        return switch (proto.getValueCase()) {
+            case INT_VAL -> Datum.of(proto.getIntVal());
+            case DOUBLE_VAL -> Datum.of(proto.getDoubleVal());
+            case DECIMAL_VAL -> Datum.of(new BigDecimal(proto.getDecimalVal()));
+            case STRING_VAL -> Datum.of(proto.getStringVal());
+            case BYTES_VAL -> Datum.of(proto.getBytesVal().toByteArray());
+            case DATETIME_VAL -> Datum.of(LocalDateTime.parse(proto.getDatetimeVal(),
+                    DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+            case NULL_VAL -> Datum.nil();
+            case VALUE_NOT_SET -> Datum.nil();
+        };
+    }
+
+    // --- CopRequest → DAGRequest bytes ---
+
+    public static byte[] encodeDAGRequest(CopRequestCodec.CopRequest req) {
+        Tipb.DAGRequest.Builder b = Tipb.DAGRequest.newBuilder()
+                .setTableId(req.tableId());
+
+        for (CopRequestCodec.ColumnDesc col : req.columns()) {
+            b.addColumns(Tipb.ColumnInfo.newBuilder()
+                    .setColumnId(col.id())
+                    .setDataType(col.type().ordinal())
+                    .setAutoIncrement(col.autoIncrement())
+                    .setOffset(col.offset()));
+        }
+
+        for (int idx : req.outputColumnIndices()) {
+            b.addOutputColumnIndices(idx);
+        }
+
+        if (req.conditions() != null) {
+            for (Expression cond : req.conditions()) {
+                b.addConditions(encodeExpr(cond));
+            }
+        }
+
+        if (req.groupByExprs() != null) {
+            for (Expression gb : req.groupByExprs()) {
+                b.addGroupByExprs(encodeExpr(gb));
+            }
+        }
+
+        if (req.aggFuncs() != null) {
+            for (CopRequestCodec.AggFuncDesc agg : req.aggFuncs()) {
+                Tipb.AggFuncDesc.Builder aggB = Tipb.AggFuncDesc.newBuilder()
+                        .setAggType(agg.type().ordinal())
+                        .setDistinct(agg.distinct());
+                if (agg.arg() != null) aggB.setArg(encodeExpr(agg.arg()));
+                b.addAggFuncs(aggB);
+            }
+        }
+
+        b.setTopnLimit(req.topNLimit());
+        b.setTopnOffset(req.topNOffset());
+
+        if (req.orderByExprs() != null) {
+            for (int i = 0; i < req.orderByExprs().size(); i++) {
+                b.addOrderBy(Tipb.ByItem.newBuilder()
+                        .setExpr(encodeExpr(req.orderByExprs().get(i)))
+                        .setDesc(!req.orderByAsc().get(i)));
+            }
+        }
+
+        return b.build().toByteArray();
+    }
+
+    // --- SelectResponse bytes → CopResponse ---
+
+    public static CopRequestCodec.CopResponse decodeResponse(byte[] data) {
+        try {
+            Tipb.SelectResponse resp = Tipb.SelectResponse.parseFrom(data);
+
+            if (resp.getIsAgg()) {
+                List<CopRequestCodec.AggGroupResult> groups = new ArrayList<>(resp.getAggGroupsCount());
+                for (Tipb.AggGroupResult protoGroup : resp.getAggGroupsList()) {
+                    List<Datum> groupKeys = new ArrayList<>(protoGroup.getGroupKeysCount());
+                    for (Tipb.Datum pk : protoGroup.getGroupKeysList()) {
+                        groupKeys.add(decodeDatum(pk));
+                    }
+
+                    List<CopRequestCodec.PartialAggState> states = new ArrayList<>(protoGroup.getPartialStatesCount());
+                    for (Tipb.PartialAggState ps : protoGroup.getPartialStatesList()) {
+                        AggFunction.Type aggType = AggFunction.Type.values()[ps.getAggType()];
+                        List<Datum> stateData = new ArrayList<>(ps.getStateCount());
+                        for (Tipb.Datum sd : ps.getStateList()) {
+                            stateData.add(decodeDatum(sd));
+                        }
+                        states.add(new CopRequestCodec.PartialAggState(aggType, ps.getDistinct(), stateData));
+                    }
+                    groups.add(new CopRequestCodec.AggGroupResult(groupKeys, states));
+                }
+                return new CopRequestCodec.CopResponse.AggResult(groups);
+            } else {
+                byte[] kvData = resp.getKvPairData().toByteArray();
+                return new CopRequestCodec.CopResponse.FilteredRows(kvData);
+            }
+        } catch (InvalidProtocolBufferException e) {
+            throw new IllegalStateException("Failed to parse SelectResponse", e);
+        }
+    }
+}

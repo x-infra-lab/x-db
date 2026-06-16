@@ -42,6 +42,8 @@ public final class AggFunctions {
         @Override public Datum result() { return Datum.of(count); }
         @Override public AggFunction newInstance() { return new CountAgg(arg, distinct); }
         @Override public DataType returnType() { return DataType.BIGINT; }
+        @Override public long partialCount() { return count; }
+        @Override public void restorePartialState(long c, BigDecimal s) { this.count = c; }
     }
 
     static class SumAgg implements AggFunction {
@@ -74,6 +76,10 @@ public final class AggFunctions {
         @Override public Datum result() { return hasValue ? Datum.of(sum) : Datum.nil(); }
         @Override public AggFunction newInstance() { return new SumAgg(arg, distinct); }
         @Override public DataType returnType() { return DataType.DECIMAL; }
+        @Override public BigDecimal partialSum() { return sum; }
+        @Override public void restorePartialState(long c, BigDecimal s) {
+            if (s != null) { this.hasValue = true; this.sum = s; }
+        }
     }
 
     static class AvgAgg implements AggFunction {
@@ -109,6 +115,12 @@ public final class AggFunctions {
         }
         @Override public AggFunction newInstance() { return new AvgAgg(arg, distinct); }
         @Override public DataType returnType() { return DataType.DECIMAL; }
+        @Override public long partialCount() { return count; }
+        @Override public BigDecimal partialSum() { return sum; }
+        @Override public void restorePartialState(long c, BigDecimal s) {
+            this.count = c;
+            if (s != null) this.sum = s;
+        }
     }
 
     static class MinAgg implements AggFunction {

@@ -15,6 +15,7 @@ import io.github.xinfra.lab.xkv.client.XKvClient;
 import io.github.xinfra.lab.xkv.client.config.ClientConfig;
 import io.github.xinfra.lab.xkv.client.raw.RawKvClient;
 import io.github.xinfra.lab.xkv.client.TxnClient;
+import io.github.xinfra.lab.xkv.client.cop.CopClient;
 import io.github.xinfra.lab.xkv.client.txn.Transaction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -91,9 +92,26 @@ public class XDBBootstrap {
         TransactionManager.TxnRollbacker txnRollbacker =
                 txn -> ((Transaction) txn).rollback();
 
+        CopClient copClient = txnClient.copClient();
+
         TransactionManager.TxnContextFactory txnContextFactory =
                 (txn, evalCtx) -> {
                     Transaction t = (Transaction) txn;
+                    TransactionContext.KVCopProcessor copProcessor =
+                            (tp, data, startTs, start, end, conc) -> {
+                                var it = copClient.sendToRangeParallel(
+                                        tp, data, t.startTs(), start, end, conc);
+                                return new java.util.Iterator<TransactionContext.KVCopProcessor.CopRegionResult>() {
+                                    @Override public boolean hasNext() { return it.hasNext(); }
+                                    @Override public TransactionContext.KVCopProcessor.CopRegionResult next() {
+                                        var r = it.next();
+                                        return new TransactionContext.KVCopProcessor.CopRegionResult(
+                                                r.regionId(),
+                                                r.response().getData().toByteArray(),
+                                                r.response().getOtherError());
+                                    }
+                                };
+                            };
                     return new TransactionContext(
                             (s, e, l) -> StreamSupport.stream(t.scan(s, e, l).spliterator(), false)
                                     .map(kp -> new TransactionContext.KVPair(kp.key(), kp.value()))
@@ -101,6 +119,7 @@ public class XDBBootstrap {
                             key -> t.get(key).orElse(null),
                             t::put,
                             t::delete,
+                            copProcessor,
                             evalCtx
                     );
                 };

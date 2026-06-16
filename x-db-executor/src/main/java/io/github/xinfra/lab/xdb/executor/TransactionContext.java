@@ -2,6 +2,7 @@ package io.github.xinfra.lab.xdb.executor;
 
 import io.github.xinfra.lab.xdb.expression.EvalContext;
 
+import java.util.Iterator;
 import java.util.List;
 
 /**
@@ -30,21 +31,39 @@ public class TransactionContext {
         void delete(byte[] key) throws Exception;
     }
 
+    @FunctionalInterface
+    public interface KVCopProcessor {
+        Iterator<CopRegionResult> scanParallel(
+                int requestType, byte[] data, long startTs,
+                byte[] startKey, byte[] endKey, int concurrency) throws Exception;
+
+        record CopRegionResult(long regionId, byte[] data, String error) {}
+    }
+
     public record KVPair(byte[] key, byte[] value) {}
 
     private final KVScanner scanner;
     private final KVGetter getter;
     private final KVPutter putter;
     private final KVDeleter deleter;
+    private final KVCopProcessor copProcessor;
     private final EvalContext evalContext;
 
     public TransactionContext(KVScanner scanner, KVGetter getter,
                               KVPutter putter, KVDeleter deleter,
                               EvalContext evalContext) {
+        this(scanner, getter, putter, deleter, null, evalContext);
+    }
+
+    public TransactionContext(KVScanner scanner, KVGetter getter,
+                              KVPutter putter, KVDeleter deleter,
+                              KVCopProcessor copProcessor,
+                              EvalContext evalContext) {
         this.scanner = scanner;
         this.getter = getter;
         this.putter = putter;
         this.deleter = deleter;
+        this.copProcessor = copProcessor;
         this.evalContext = evalContext;
     }
 
@@ -62,6 +81,10 @@ public class TransactionContext {
 
     public KVDeleter deleter() {
         return deleter;
+    }
+
+    public KVCopProcessor copProcessor() {
+        return copProcessor;
     }
 
     public EvalContext evalContext() {

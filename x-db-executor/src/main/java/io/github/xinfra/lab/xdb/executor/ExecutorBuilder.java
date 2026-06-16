@@ -11,6 +11,10 @@ import io.github.xinfra.lab.xdb.executor.rel.ProjectionExecutor;
 import io.github.xinfra.lab.xdb.executor.rel.SelectionExecutor;
 import io.github.xinfra.lab.xdb.executor.rel.SortExecutor;
 import io.github.xinfra.lab.xdb.executor.rel.StreamAggExecutor;
+import io.github.xinfra.lab.xdb.executor.rel.UnionExecutor;
+import io.github.xinfra.lab.xdb.executor.scan.DistAggExecutor;
+import io.github.xinfra.lab.xdb.executor.scan.DistScanExecutor;
+import io.github.xinfra.lab.xdb.executor.scan.DistTopNExecutor;
 import io.github.xinfra.lab.xdb.executor.scan.IndexLookupExecutor;
 import io.github.xinfra.lab.xdb.executor.scan.IndexScanExecutor;
 import io.github.xinfra.lab.xdb.executor.scan.TableScanExecutor;
@@ -35,6 +39,7 @@ import io.github.xinfra.lab.xdb.planner.physical.PhysicalProjection;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalSelection;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalShowStmt;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalSort;
+import io.github.xinfra.lab.xdb.planner.physical.PhysicalUnion;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalStreamAgg;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalTableScan;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalUpdate;
@@ -111,12 +116,21 @@ public class ExecutorBuilder {
             return new DualExecutor();
         } else if (plan instanceof PhysicalShowStmt p) {
             return buildShow(p);
+        } else if (plan instanceof PhysicalUnion p) {
+            return buildUnion(p);
         } else {
             throw XDBException.internal("Unsupported plan: " + plan.getClass().getSimpleName());
         }
     }
 
+    private static final long DIST_SCAN_ROW_THRESHOLD = 10_000;
+    private static final int DIST_SCAN_CONCURRENCY = 4;
+
     private Executor buildTableScan(PhysicalTableScan plan) {
+        if (txnCtx.copProcessor() != null && plan.estimatedRowCount() >= DIST_SCAN_ROW_THRESHOLD) {
+            return new DistScanExecutor(txnCtx, plan.table(),
+                    plan.outputSchema(), plan.accessConditions(), DIST_SCAN_CONCURRENCY);
+        }
         return new TableScanExecutor(txnCtx, plan.table(),
                 plan.outputSchema(), plan.accessConditions());
     }
@@ -141,6 +155,15 @@ public class ExecutorBuilder {
     }
 
     private Executor buildSelection(PhysicalSelection plan) {
+        if (txnCtx.copProcessor() != null
+                && plan.child() instanceof PhysicalTableScan ts
+                && ts.estimatedRowCount() >= DIST_SCAN_ROW_THRESHOLD) {
+            var allCond = new java.util.ArrayList<>(ts.accessConditions());
+            allCond.addAll(plan.conditions());
+            return new DistScanExecutor(txnCtx, ts.table(),
+                    plan.outputSchema(), allCond, DIST_SCAN_CONCURRENCY);
+        }
+
         Executor child = build(plan.child());
         EvalContext evalCtx = txnCtx.evalContext();
         java.util.List<Expression> conditions = materializer().materializeAll(plan.conditions());
@@ -155,11 +178,62 @@ public class ExecutorBuilder {
     }
 
     private Executor buildLimit(PhysicalLimit plan) {
+        if (txnCtx.copProcessor() != null
+                && plan.child() instanceof PhysicalSort sort) {
+            java.util.List<Expression> conditions = java.util.List.of();
+            PhysicalTableScan tableScan = null;
+
+            if (sort.child() instanceof PhysicalTableScan ts
+                    && ts.estimatedRowCount() >= DIST_SCAN_ROW_THRESHOLD) {
+                tableScan = ts;
+                conditions = ts.accessConditions();
+            } else if (sort.child() instanceof PhysicalSelection sel
+                    && sel.child() instanceof PhysicalTableScan ts
+                    && ts.estimatedRowCount() >= DIST_SCAN_ROW_THRESHOLD) {
+                tableScan = ts;
+                var allCond = new java.util.ArrayList<>(ts.accessConditions());
+                allCond.addAll(sel.conditions());
+                conditions = allCond;
+            }
+
+            if (tableScan != null) {
+                return new DistTopNExecutor(txnCtx, tableScan.table(),
+                        sort.child().outputSchema(), conditions,
+                        sort.orderByExprs(), sort.ascending(),
+                        plan.count(), plan.offset(), DIST_SCAN_CONCURRENCY);
+            }
+        }
+
         Executor child = build(plan.child());
         return new LimitExecutor(child, plan.count(), plan.offset());
     }
 
     private Executor buildHashAgg(PhysicalHashAgg plan) {
+        if (txnCtx.copProcessor() != null) {
+            java.util.List<Expression> conditions = java.util.List.of();
+            PhysicalTableScan tableScan = null;
+
+            if (plan.child() instanceof PhysicalTableScan ts
+                    && ts.estimatedRowCount() >= DIST_SCAN_ROW_THRESHOLD) {
+                tableScan = ts;
+                conditions = ts.accessConditions();
+            } else if (plan.child() instanceof PhysicalSelection sel
+                    && sel.child() instanceof PhysicalTableScan ts
+                    && ts.estimatedRowCount() >= DIST_SCAN_ROW_THRESHOLD) {
+                tableScan = ts;
+                var allCond = new java.util.ArrayList<>(ts.accessConditions());
+                allCond.addAll(sel.conditions());
+                conditions = allCond;
+            }
+
+            if (tableScan != null) {
+                return new DistAggExecutor(txnCtx, tableScan.table(),
+                        plan.outputSchema(), conditions,
+                        plan.groupByExprs(), plan.aggFunctions(),
+                        DIST_SCAN_CONCURRENCY);
+            }
+        }
+
         Executor child = build(plan.child());
         EvalContext evalCtx = txnCtx.evalContext();
         return new HashAggExecutor(child, plan.groupByExprs(), plan.aggFunctions(),
@@ -167,6 +241,31 @@ public class ExecutorBuilder {
     }
 
     private Executor buildStreamAgg(PhysicalStreamAgg plan) {
+        if (txnCtx.copProcessor() != null) {
+            java.util.List<Expression> conditions = java.util.List.of();
+            PhysicalTableScan tableScan = null;
+
+            if (plan.child() instanceof PhysicalTableScan ts
+                    && ts.estimatedRowCount() >= DIST_SCAN_ROW_THRESHOLD) {
+                tableScan = ts;
+                conditions = ts.accessConditions();
+            } else if (plan.child() instanceof PhysicalSelection sel
+                    && sel.child() instanceof PhysicalTableScan ts
+                    && ts.estimatedRowCount() >= DIST_SCAN_ROW_THRESHOLD) {
+                tableScan = ts;
+                var allCond = new java.util.ArrayList<>(ts.accessConditions());
+                allCond.addAll(sel.conditions());
+                conditions = allCond;
+            }
+
+            if (tableScan != null) {
+                return new DistAggExecutor(txnCtx, tableScan.table(),
+                        plan.outputSchema(), conditions,
+                        plan.groupByExprs(), plan.aggFunctions(),
+                        DIST_SCAN_CONCURRENCY);
+            }
+        }
+
         Executor child = build(plan.child());
         EvalContext evalCtx = txnCtx.evalContext();
         return new StreamAggExecutor(child, plan.groupByExprs(), plan.aggFunctions(),
@@ -210,5 +309,13 @@ public class ExecutorBuilder {
         String dbName = plan.databaseName() != null ? plan.databaseName() : currentDatabase;
         return new ShowExecutor(plan.showType(), dbName, plan.tableName(),
                 infoSchema, plan.outputSchema());
+    }
+
+    private Executor buildUnion(PhysicalUnion plan) {
+        java.util.List<Executor> children = new java.util.ArrayList<>();
+        for (var child : plan.inputs()) {
+            children.add(build(child));
+        }
+        return new UnionExecutor(children, plan.isAll(), plan.outputSchema());
     }
 }

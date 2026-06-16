@@ -23,6 +23,11 @@
             <artifactId>x-db-expression</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.github.x-infra-lab</groupId>
+            <artifactId>x-kv-proto</artifactId>
+            <version>${x-kv.version}</version>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
         </dependency>
