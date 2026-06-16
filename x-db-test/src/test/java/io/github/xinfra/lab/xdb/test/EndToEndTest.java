@@ -314,8 +314,290 @@ class EndToEndTest {
     }
 
     // -----------------------------------------------------------------------
+    // Distributed push-down (selection / aggregation / TopN)
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("Distributed push-down")
+    class DistributedPushDown {
+
+        @BeforeEach
+        void setupData() {
+            freshDb();
+            session.execute("CREATE TABLE employees (id BIGINT PRIMARY KEY, dept VARCHAR(255), salary INT)");
+            session.execute("INSERT INTO employees (id, dept, salary) VALUES (1, 'eng', 100)");
+            session.execute("INSERT INTO employees (id, dept, salary) VALUES (2, 'eng', 200)");
+            session.execute("INSERT INTO employees (id, dept, salary) VALUES (3, 'sales', 150)");
+            session.execute("INSERT INTO employees (id, dept, salary) VALUES (4, 'sales', 250)");
+            session.execute("INSERT INTO employees (id, dept, salary) VALUES (5, 'eng', 300)");
+        }
+
+        @Test
+        @DisplayName("Selection push-down: WHERE filter via DistScanExecutor")
+        void selectionPushDown() {
+            ExecuteResult result = session.execute(
+                    "SELECT * FROM employees WHERE salary > 150");
+            assertThat(result.getRows()).hasSize(3);
+        }
+
+        @Test
+        @DisplayName("Aggregation push-down: COUNT via DistAggExecutor")
+        void aggCountPushDown() {
+            ExecuteResult result = session.execute(
+                    "SELECT COUNT(*) FROM employees");
+            assertThat(result.getRows()).hasSize(1);
+            assertThat(result.getRows().get(0).get(0).toLong()).isEqualTo(5);
+        }
+
+        @Test
+        @DisplayName("Aggregation push-down: SUM via DistAggExecutor")
+        void aggSumPushDown() {
+            ExecuteResult result = session.execute(
+                    "SELECT SUM(salary) FROM employees");
+            assertThat(result.getRows()).hasSize(1);
+            assertThat(result.getRows().get(0).get(0).toLong()).isEqualTo(1000);
+        }
+
+        @Test
+        @DisplayName("Aggregation push-down: GROUP BY via DistAggExecutor")
+        void aggGroupByPushDown() {
+            ExecuteResult result = session.execute(
+                    "SELECT dept, COUNT(*), SUM(salary) FROM employees GROUP BY dept");
+            assertThat(result.getRows()).hasSize(2);
+
+            boolean foundEng = false, foundSales = false;
+            for (Row row : result.getRows()) {
+                String dept = row.get(0).toStringValue();
+                long cnt = row.get(1).toLong();
+                long total = row.get(2).toLong();
+                if ("eng".equals(dept)) {
+                    assertThat(cnt).isEqualTo(3);
+                    assertThat(total).isEqualTo(600);
+                    foundEng = true;
+                }
+                if ("sales".equals(dept)) {
+                    assertThat(cnt).isEqualTo(2);
+                    assertThat(total).isEqualTo(400);
+                    foundSales = true;
+                }
+            }
+            assertThat(foundEng).isTrue();
+            assertThat(foundSales).isTrue();
+        }
+
+        @Test
+        @DisplayName("Aggregation push-down: MIN/MAX via DistAggExecutor")
+        void aggMinMaxPushDown() {
+            ExecuteResult result = session.execute(
+                    "SELECT MIN(salary), MAX(salary) FROM employees");
+            assertThat(result.getRows()).hasSize(1);
+            assertThat(result.getRows().get(0).get(0).toLong()).isEqualTo(100);
+            assertThat(result.getRows().get(0).get(1).toLong()).isEqualTo(300);
+        }
+
+        @Test
+        @DisplayName("TopN push-down: ORDER BY ASC LIMIT via DistTopNExecutor")
+        void topNAscPushDown() {
+            ExecuteResult result = session.execute(
+                    "SELECT * FROM employees ORDER BY salary LIMIT 3");
+            List<Row> rows = result.getRows();
+            assertThat(rows).hasSize(3);
+            assertThat(rows.get(0).get(2).toLong()).isEqualTo(100);
+            assertThat(rows.get(1).get(2).toLong()).isEqualTo(150);
+            assertThat(rows.get(2).get(2).toLong()).isEqualTo(200);
+        }
+
+        @Test
+        @DisplayName("TopN push-down: ORDER BY DESC LIMIT via DistTopNExecutor")
+        void topNDescPushDown() {
+            ExecuteResult result = session.execute(
+                    "SELECT * FROM employees ORDER BY salary DESC LIMIT 2");
+            List<Row> rows = result.getRows();
+            assertThat(rows).hasSize(2);
+            assertThat(rows.get(0).get(2).toLong()).isEqualTo(300);
+            assertThat(rows.get(1).get(2).toLong()).isEqualTo(250);
+        }
+
+        @Test
+        @DisplayName("Aggregation push-down with WHERE: filtered COUNT")
+        void aggWithFilterPushDown() {
+            ExecuteResult result = session.execute(
+                    "SELECT COUNT(*) FROM employees WHERE salary >= 200");
+            assertThat(result.getRows()).hasSize(1);
+            assertThat(result.getRows().get(0).get(0).toLong()).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("Aggregation push-down: empty table")
+        void aggEmptyTable() {
+            session.execute("CREATE TABLE empty_emp (id BIGINT PRIMARY KEY, val INT)");
+            ExecuteResult result = session.execute("SELECT COUNT(*) FROM empty_emp");
+            assertThat(result.getRows()).hasSize(1);
+            assertThat(result.getRows().get(0).get(0).toLong()).isEqualTo(0);
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Error handling
     // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("UNION features")
+    class UnionFeatures {
+
+        @Test
+        @DisplayName("UNION ALL merges two result sets")
+        void unionAll() {
+            freshDb();
+            session.execute("CREATE TABLE t1 (id BIGINT PRIMARY KEY, name VARCHAR(100))");
+            session.execute("CREATE TABLE t2 (id BIGINT PRIMARY KEY, name VARCHAR(100))");
+            session.execute("INSERT INTO t1 VALUES (1, 'alice'), (2, 'bob')");
+            session.execute("INSERT INTO t2 VALUES (3, 'charlie'), (4, 'dave')");
+
+            ExecuteResult result = session.execute(
+                    "SELECT id, name FROM t1 UNION ALL SELECT id, name FROM t2");
+            assertThat(result.isQuery()).isTrue();
+            assertThat(result.getRows()).hasSize(4);
+        }
+
+        @Test
+        @DisplayName("UNION removes duplicates")
+        void unionDistinct() {
+            freshDb();
+            session.execute("CREATE TABLE t1 (id BIGINT PRIMARY KEY, val INT)");
+            session.execute("CREATE TABLE t2 (id BIGINT PRIMARY KEY, val INT)");
+            session.execute("INSERT INTO t1 VALUES (1, 10), (2, 20)");
+            session.execute("INSERT INTO t2 VALUES (3, 10), (4, 30)");
+
+            ExecuteResult result = session.execute(
+                    "SELECT val FROM t1 UNION SELECT val FROM t2");
+            assertThat(result.isQuery()).isTrue();
+            assertThat(result.getRows()).hasSize(3);
+        }
+
+        @Test
+        @DisplayName("UNION ALL keeps duplicates")
+        void unionAllKeepsDuplicates() {
+            freshDb();
+            session.execute("CREATE TABLE t1 (id BIGINT PRIMARY KEY, val INT)");
+            session.execute("CREATE TABLE t2 (id BIGINT PRIMARY KEY, val INT)");
+            session.execute("INSERT INTO t1 VALUES (1, 10), (2, 20)");
+            session.execute("INSERT INTO t2 VALUES (3, 10), (4, 30)");
+
+            ExecuteResult result = session.execute(
+                    "SELECT val FROM t1 UNION ALL SELECT val FROM t2");
+            assertThat(result.isQuery()).isTrue();
+            assertThat(result.getRows()).hasSize(4);
+        }
+
+        @Test
+        @DisplayName("UNION column count mismatch throws")
+        void unionColumnMismatch() {
+            freshDb();
+            session.execute("CREATE TABLE t1 (id BIGINT PRIMARY KEY, name VARCHAR(100))");
+            session.execute("CREATE TABLE t2 (id BIGINT PRIMARY KEY)");
+
+            assertThatThrownBy(() -> session.execute(
+                    "SELECT id, name FROM t1 UNION ALL SELECT id FROM t2"))
+                    .isInstanceOf(RuntimeException.class);
+        }
+
+        @Test
+        @DisplayName("Three-way UNION ALL")
+        void threeWayUnion() {
+            freshDb();
+            session.execute("CREATE TABLE t1 (id BIGINT PRIMARY KEY, val INT)");
+            session.execute("CREATE TABLE t2 (id BIGINT PRIMARY KEY, val INT)");
+            session.execute("CREATE TABLE t3 (id BIGINT PRIMARY KEY, val INT)");
+            session.execute("INSERT INTO t1 VALUES (1, 10)");
+            session.execute("INSERT INTO t2 VALUES (2, 20)");
+            session.execute("INSERT INTO t3 VALUES (3, 30)");
+
+            ExecuteResult result = session.execute(
+                    "SELECT val FROM t1 UNION ALL SELECT val FROM t2 UNION ALL SELECT val FROM t3");
+            assertThat(result.isQuery()).isTrue();
+            assertThat(result.getRows()).hasSize(3);
+        }
+    }
+
+    @Nested
+    @DisplayName("CREATE INDEX standalone syntax")
+    class CreateIndexSyntax {
+
+        @Test
+        @DisplayName("CREATE INDEX creates an index")
+        void createIndex() {
+            freshDb();
+            session.execute("CREATE TABLE users (id BIGINT PRIMARY KEY, name VARCHAR(100), age INT)");
+            session.execute("CREATE INDEX idx_name ON users(name)");
+
+            ExecuteResult desc = session.execute("DESCRIBE users");
+            assertThat(desc.isQuery()).isTrue();
+            boolean foundIdx = desc.getRows().stream()
+                    .anyMatch(r -> "name".equalsIgnoreCase(r.get(0).toStringValue())
+                            && "MUL".equalsIgnoreCase(r.get(3).toStringValue()));
+            assertThat(foundIdx).as("name column should show MUL key after CREATE INDEX").isTrue();
+        }
+
+        @Test
+        @DisplayName("CREATE INDEX on multiple columns")
+        void createCompositeIndex() {
+            freshDb();
+            session.execute("CREATE TABLE orders (id BIGINT PRIMARY KEY, customer_id INT, status VARCHAR(20))");
+            session.execute("CREATE INDEX idx_cust_status ON orders(customer_id, status)");
+
+            ExecuteResult desc = session.execute("DESCRIBE orders");
+            assertThat(desc.isQuery()).isTrue();
+            boolean foundIdx = desc.getRows().stream()
+                    .anyMatch(r -> "customer_id".equalsIgnoreCase(r.get(0).toStringValue())
+                            && "MUL".equalsIgnoreCase(r.get(3).toStringValue()));
+            assertThat(foundIdx).as("customer_id should show MUL key").isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("HAVING validation")
+    class HavingValidation {
+
+        @Test
+        @DisplayName("HAVING with aggregate function is valid")
+        void havingWithAgg() {
+            freshDb();
+            session.execute("CREATE TABLE items (id BIGINT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(100), qty INT)");
+            session.execute("INSERT INTO items (name, qty) VALUES ('a', 5), ('a', 3), ('b', 10)");
+
+            ExecuteResult result = session.execute(
+                    "SELECT name, COUNT(*) FROM items GROUP BY name HAVING COUNT(*) > 1");
+            assertThat(result.isQuery()).isTrue();
+            assertThat(result.getRows()).hasSize(1);
+            assertThat(result.getRows().get(0).get(0).toStringValue()).isEqualTo("a");
+        }
+
+        @Test
+        @DisplayName("HAVING referencing non-aggregated column throws")
+        void havingNonAggColumn() {
+            freshDb();
+            session.execute("CREATE TABLE items (id BIGINT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(100), age INT)");
+            session.execute("INSERT INTO items (name, age) VALUES ('a', 10), ('a', 20), ('b', 30)");
+
+            assertThatThrownBy(() -> session.execute(
+                    "SELECT name FROM items GROUP BY name HAVING age > 1"))
+                    .isInstanceOf(RuntimeException.class);
+        }
+
+        @Test
+        @DisplayName("HAVING without GROUP BY with aggregate is valid")
+        void havingNoGroupBy() {
+            freshDb();
+            session.execute("CREATE TABLE items (id BIGINT PRIMARY KEY AUTO_INCREMENT, val INT)");
+            session.execute("INSERT INTO items (val) VALUES (1), (2), (3)");
+
+            ExecuteResult result = session.execute(
+                    "SELECT COUNT(*) FROM items HAVING COUNT(*) > 0");
+            assertThat(result.isQuery()).isTrue();
+            assertThat(result.getRows()).hasSize(1);
+        }
+    }
 
     @Nested
     @DisplayName("Error handling")
