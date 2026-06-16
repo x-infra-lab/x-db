@@ -8,6 +8,7 @@ public class ColumnStatistics {
     private Datum maxValue;
     private long nullCount;
     private long totalCount;
+    private Histogram histogram;
 
     public ColumnStatistics() {}
 
@@ -35,6 +36,9 @@ public class ColumnStatistics {
     public long getTotalCount() { return totalCount; }
     public void setTotalCount(long totalCount) { this.totalCount = totalCount; }
 
+    public Histogram getHistogram() { return histogram; }
+    public void setHistogram(Histogram histogram) { this.histogram = histogram; }
+
     public double nullFraction() {
         return totalCount > 0 ? (double) nullCount / totalCount : 0.0;
     }
@@ -42,5 +46,25 @@ public class ColumnStatistics {
     public double equalitySelectivity() {
         if (ndv > 0) return 1.0 / ndv;
         return 0.33;
+    }
+
+    public double estimateEqual(Datum value) {
+        if (histogram != null) return histogram.estimateEqual(value);
+        return equalitySelectivity();
+    }
+
+    public double estimateLessThan(Datum value) {
+        if (histogram != null) return histogram.estimateLessThan(value);
+        return ndv > 0 ? Math.min(1.0, 3.0 / ndv) : 0.33;
+    }
+
+    public double estimateGreaterThan(Datum value) {
+        if (histogram != null) return histogram.estimateGreaterThan(value);
+        return ndv > 0 ? Math.min(1.0, 3.0 / ndv) : 0.33;
+    }
+
+    public double estimateRange(Datum low, Datum high) {
+        if (histogram != null) return histogram.estimateRange(low, high, true, false);
+        return ndv > 0 ? Math.min(1.0, 3.0 / ndv) : 0.33;
     }
 }

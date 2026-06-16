@@ -213,6 +213,16 @@ public class KVMetaStore implements MetaStore {
         }
     }
 
+    @Override
+    public void putTableStats(long tableId, byte[] statsJson) {
+        putter.put(MetaCodec.statsKey(tableId), statsJson);
+    }
+
+    @Override
+    public byte[] getTableStats(long tableId) {
+        return getter.get(MetaCodec.statsKey(tableId));
+    }
+
     // --- JSON helpers ---
 
     private byte[] toJson(Object obj) {

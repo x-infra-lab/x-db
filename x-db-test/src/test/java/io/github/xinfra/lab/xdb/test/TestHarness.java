@@ -239,6 +239,9 @@ public class TestHarness implements AutoCloseable {
             return autoIncIds.computeIfAbsent(tableId, k -> new AtomicLong(0)).addAndGet(batchSize);
         }
         @Override public long allocGlobalId() { return globalIdGen.incrementAndGet(); }
+        private final Map<Long, byte[]> statsData = new HashMap<>();
+        @Override public void putTableStats(long tableId, byte[] statsJson) { statsData.put(tableId, statsJson); }
+        @Override public byte[] getTableStats(long tableId) { return statsData.get(tableId); }
     }
 
     static class InMemoryDDLJobQueue implements DDLJobQueue {

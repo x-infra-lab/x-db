@@ -3,6 +3,7 @@ package io.github.xinfra.lab.xdb.session;
 import io.github.xinfra.lab.xdb.meta.InfoSchema;
 import io.github.xinfra.lab.xdb.meta.InfoSchemaBuilder;
 import io.github.xinfra.lab.xdb.meta.MetaStore;
+import io.github.xinfra.lab.xdb.planner.cost.StatsStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,6 +80,11 @@ public class InfoSchemaHolder {
             log.debug("Refreshing InfoSchema: {} -> {}", lastVersion, latestVersion);
             this.current = InfoSchemaBuilder.build(metaStore);
             this.lastVersion = latestVersion;
+            try {
+                StatsStore.getInstance().loadFromMetaStore(metaStore, current);
+            } catch (Exception e) {
+                log.warn("Failed to reload table statistics", e);
+            }
         }
         this.lastRefreshTime = System.currentTimeMillis();
     }

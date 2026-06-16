@@ -193,6 +193,57 @@ public final class TipbCodec {
         return b.build().toByteArray();
     }
 
+    // --- AnalyzeReq ---
+
+    public static byte[] encodeAnalyzeReq(long tableId,
+                                             List<CopRequestCodec.ColumnDesc> columns,
+                                             int sampleSize) {
+        Tipb.AnalyzeReq.Builder b = Tipb.AnalyzeReq.newBuilder()
+                .setTableId(tableId)
+                .setSampleSize(sampleSize);
+
+        for (int i = 0; i < columns.size(); i++) {
+            CopRequestCodec.ColumnDesc col = columns.get(i);
+            b.addColumns(Tipb.ColumnInfo.newBuilder()
+                    .setColumnId(col.id())
+                    .setDataType(col.type().ordinal())
+                    .setAutoIncrement(col.autoIncrement())
+                    .setOffset(col.offset()));
+            b.addOutputColumnIndices(i);
+        }
+
+        return b.build().toByteArray();
+    }
+
+    public record AnalyzeColumnResult(
+            long columnId, long ndv, long nullCount, long totalCount,
+            Datum minValue, Datum maxValue, List<Datum> sampleValues
+    ) {}
+
+    public record AnalyzeResult(long rowCount, List<AnalyzeColumnResult> columnResults) {}
+
+    public static AnalyzeResult decodeAnalyzeResult(byte[] data) {
+        try {
+            Tipb.AnalyzeResult proto = Tipb.AnalyzeResult.parseFrom(data);
+            List<AnalyzeColumnResult> results = new ArrayList<>(proto.getColumnResultsCount());
+            for (Tipb.AnalyzeColumnResult cr : proto.getColumnResultsList()) {
+                List<Datum> samples = new ArrayList<>(cr.getSampleValuesCount());
+                for (Tipb.Datum sd : cr.getSampleValuesList()) {
+                    samples.add(decodeDatum(sd));
+                }
+                results.add(new AnalyzeColumnResult(
+                        cr.getColumnId(), cr.getNdv(), cr.getNullCount(), cr.getTotalCount(),
+                        cr.hasMinValue() ? decodeDatum(cr.getMinValue()) : Datum.nil(),
+                        cr.hasMaxValue() ? decodeDatum(cr.getMaxValue()) : Datum.nil(),
+                        samples
+                ));
+            }
+            return new AnalyzeResult(proto.getRowCount(), results);
+        } catch (InvalidProtocolBufferException e) {
+            throw new IllegalStateException("Failed to parse AnalyzeResult", e);
+        }
+    }
+
     // --- SelectResponse bytes → CopResponse ---
 
     public static CopRequestCodec.CopResponse decodeResponse(byte[] data) {

@@ -38,4 +38,8 @@ public interface MetaStore {
     long allocAutoIncId(long tableId, int batchSize);
 
     long allocGlobalId();
+
+    void putTableStats(long tableId, byte[] statsJson);
+
+    byte[] getTableStats(long tableId);
 }

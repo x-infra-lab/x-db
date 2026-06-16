@@ -8,6 +8,7 @@ import io.github.xinfra.lab.xdb.ddl.SchemaChangeExecutor;
 import io.github.xinfra.lab.xdb.executor.TransactionContext;
 import io.github.xinfra.lab.xdb.expression.EvalContext;
 import io.github.xinfra.lab.xdb.meta.KVMetaStore;
+import io.github.xinfra.lab.xdb.planner.cost.StatsStore;
 import io.github.xinfra.lab.xdb.session.InfoSchemaHolder;
 import io.github.xinfra.lab.xdb.session.SessionManagerImpl;
 import io.github.xinfra.lab.xdb.session.TransactionManager;
@@ -52,6 +53,7 @@ public class XDBBootstrap {
         );
 
         InfoSchemaHolder schemaHolder = new InfoSchemaHolder(metaStore);
+        StatsStore.getInstance().loadFromMetaStore(metaStore, schemaHolder.get());
 
         KVDDLJobQueue jobQueue = new KVDDLJobQueue(
                 key -> rawKv.get(key).orElse(null),

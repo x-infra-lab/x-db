@@ -20,4 +20,5 @@ public final class KeyPrefix {
     public static final String TABLE_LIST_PREFIX = "m_DB:";
     public static final String TABLE_LIST_SUFFIX = ":tables";
     public static final String GLOBAL_ID_KEY = "m_GlobalId";
+    public static final String STATS_PREFIX = "m_Stats:";
 }

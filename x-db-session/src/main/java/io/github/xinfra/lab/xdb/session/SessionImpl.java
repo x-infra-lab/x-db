@@ -41,9 +41,13 @@ import io.github.xinfra.lab.xdb.parser.ast.UpdateStmt;
 import io.github.xinfra.lab.xdb.parser.ast.UseStmt;
 import io.github.xinfra.lab.xdb.planner.Planner;
 import io.github.xinfra.lab.xdb.planner.cost.ColumnStatistics;
+import io.github.xinfra.lab.xdb.planner.cost.Histogram;
 import io.github.xinfra.lab.xdb.planner.cost.StatsStore;
 import io.github.xinfra.lab.xdb.planner.cost.TableStatistics;
 import io.github.xinfra.lab.xdb.planner.physical.PhysicalPlan;
+import io.github.xinfra.lab.xdb.table.CopRequestCodec;
+import io.github.xinfra.lab.xdb.table.TableCodec;
+import io.github.xinfra.lab.xdb.table.TipbCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -398,77 +402,154 @@ public class SessionImpl implements Session {
             throw XDBException.tableNotFound(stmt.getTableName());
         }
 
+        List<ColumnInfo> columns = table.getPublicColumns();
+
         boolean autoStarted = !txnManager.isActive();
         txnManager.beginIfNeeded(true);
         try {
             TransactionContext txnCtx = txnManager.currentContext();
-            ExecutorBuilder builder = new ExecutorBuilder(txnCtx, is, currentDatabase);
+            TransactionContext.KVCopProcessor copProcessor = txnCtx.copProcessor();
 
-            List<ColumnInfo> columns = table.getPublicColumns();
-            Planner planner = new Planner(is);
-            Statement selectStmt = SQLParser.parse("SELECT * FROM " + stmt.getTableName());
-            PhysicalPlan plan = planner.plan(selectStmt, currentDatabase);
-            Executor exec = builder.build(plan);
-
-            long rowCount = 0;
-            long dataSize = 0;
-            java.util.Map<String, java.util.Set<String>> distinctValues = new java.util.HashMap<>();
-            java.util.Map<String, Long> nullCounts = new java.util.HashMap<>();
-
+            List<CopRequestCodec.ColumnDesc> colDescs = new ArrayList<>();
             for (ColumnInfo col : columns) {
-                distinctValues.put(col.getName().toLowerCase(), new java.util.HashSet<>());
-                nullCounts.put(col.getName().toLowerCase(), 0L);
+                colDescs.add(new CopRequestCodec.ColumnDesc(
+                        col.getId(), col.getType(), col.isAutoIncrement(), col.getOffset()));
+            }
+            byte[] analyzeReqData = TipbCodec.encodeAnalyzeReq(table.getId(), colDescs, 10_000);
+            byte[] startKey = TableCodec.encodeRowKeyMin(table.getId());
+            byte[] endKey = TableCodec.encodeRowKeyMax(table.getId());
+
+            long totalRows = 0;
+            java.util.Map<Long, AnalyzeColumnAccumulator> accumulators = new java.util.HashMap<>();
+            for (ColumnInfo col : columns) {
+                accumulators.put(col.getId(), new AnalyzeColumnAccumulator());
             }
 
-            exec.open();
-            try {
-                Row row;
-                while ((row = exec.next()) != null) {
-                    rowCount++;
-                    for (int i = 0; i < columns.size() && i < row.size(); i++) {
-                        ColumnInfo col = columns.get(i);
-                        String colKey = col.getName().toLowerCase();
-                        Datum val = row.get(i);
-                        if (val == null || val.isNull()) {
-                            nullCounts.merge(colKey, 1L, Long::sum);
-                        } else {
-                            distinctValues.get(colKey).add(val.toStringValue());
+            if (copProcessor != null) {
+                var results = copProcessor.scanParallel(2, analyzeReqData, 0, startKey, endKey, 4);
+                while (results.hasNext()) {
+                    var regionResult = results.next();
+                    if (regionResult.error() != null && !regionResult.error().isEmpty()) {
+                        throw new RuntimeException("Analyze region error: " + regionResult.error());
+                    }
+                    TipbCodec.AnalyzeResult ar = TipbCodec.decodeAnalyzeResult(regionResult.data());
+                    totalRows += ar.rowCount();
+                    for (TipbCodec.AnalyzeColumnResult cr : ar.columnResults()) {
+                        AnalyzeColumnAccumulator acc = accumulators.get(cr.columnId());
+                        if (acc != null) {
+                            acc.merge(cr);
                         }
                     }
-                    dataSize += Datum.estimateMemoryBytes(null) * columns.size();
                 }
-            } finally {
-                exec.close();
+            } else {
+                totalRows = analyzeViaExecutor(txnCtx, is, stmt.getTableName(), columns, accumulators);
             }
 
             if (autoStarted && txnManager.isActive()) {
                 txnManager.commit();
             }
 
-            TableStatistics stats = new TableStatistics(rowCount, dataSize);
+            TableStatistics stats = new TableStatistics(totalRows, totalRows * columns.size() * 16);
             for (ColumnInfo col : columns) {
-                String colKey = col.getName().toLowerCase();
+                AnalyzeColumnAccumulator acc = accumulators.get(col.getId());
                 ColumnStatistics colStats = new ColumnStatistics(
-                        distinctValues.get(colKey).size(),
-                        null, null,
-                        nullCounts.getOrDefault(colKey, 0L),
-                        rowCount);
+                        acc.ndv, acc.minValue, acc.maxValue,
+                        acc.nullCount, acc.totalCount);
+
+                if (!acc.sampleValues.isEmpty()) {
+                    acc.sampleValues.sort(io.github.xinfra.lab.xdb.expression.DatumComparator::compare);
+                    Histogram histogram = Histogram.buildFromSorted(acc.sampleValues, 256);
+                    colStats.setHistogram(histogram);
+                }
                 stats.putColumnStat(col.getName(), colStats);
             }
-            StatsStore.getInstance().putTableStats(table.getId(), stats);
+            StatsStore.getInstance().persistToMetaStore(table.getId(), stats, metaStore);
 
             ColumnInfo msgCol = new ColumnInfo();
             msgCol.setName("Msg_text");
             msgCol.setType(io.github.xinfra.lab.xdb.expression.DataType.VARCHAR);
             Row resultRow = new Row(new Datum[]{
                     Datum.of("Table '" + stmt.getTableName() + "' analyzed: "
-                            + rowCount + " rows, " + columns.size() + " columns")});
+                            + totalRows + " rows, " + columns.size() + " columns")});
             return ExecuteResult.query(List.of(msgCol), List.of(resultRow));
         } catch (Exception e) {
             if (autoStarted && txnManager.isActive()) {
                 txnManager.rollbackQuietly();
             }
             throw e;
+        }
+    }
+
+    private long analyzeViaExecutor(TransactionContext txnCtx, InfoSchema is, String tableName,
+                                    List<ColumnInfo> columns,
+                                    java.util.Map<Long, AnalyzeColumnAccumulator> accumulators) throws Exception {
+        ExecutorBuilder builder = new ExecutorBuilder(txnCtx, is, currentDatabase);
+        Planner planner = new Planner(is);
+        Statement selectStmt = SQLParser.parse("SELECT * FROM " + tableName);
+        PhysicalPlan plan = planner.plan(selectStmt, currentDatabase);
+        Executor exec = builder.build(plan);
+
+        long rowCount = 0;
+        exec.open();
+        try {
+            Row row;
+            while ((row = exec.next()) != null) {
+                rowCount++;
+                for (int i = 0; i < columns.size() && i < row.size(); i++) {
+                    ColumnInfo col = columns.get(i);
+                    AnalyzeColumnAccumulator acc = accumulators.get(col.getId());
+                    if (acc != null) {
+                        Datum val = row.get(i);
+                        acc.totalCount++;
+                        if (val == null || val.isNull()) {
+                            acc.nullCount++;
+                        } else {
+                            acc.distinctSet.add(val.toStringValue());
+                            acc.sampleValues.add(val);
+                            if (acc.minValue == null || io.github.xinfra.lab.xdb.expression.DatumComparator.compare(val, acc.minValue) < 0) {
+                                acc.minValue = val;
+                            }
+                            if (acc.maxValue == null || io.github.xinfra.lab.xdb.expression.DatumComparator.compare(val, acc.maxValue) > 0) {
+                                acc.maxValue = val;
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            exec.close();
+        }
+        for (AnalyzeColumnAccumulator acc : accumulators.values()) {
+            acc.ndv = acc.distinctSet.size();
+        }
+        return rowCount;
+    }
+
+    private static final class AnalyzeColumnAccumulator {
+        long ndv;
+        long nullCount;
+        long totalCount;
+        Datum minValue;
+        Datum maxValue;
+        final List<Datum> sampleValues = new ArrayList<>();
+        final java.util.Set<String> distinctSet = new java.util.HashSet<>();
+
+        void merge(TipbCodec.AnalyzeColumnResult cr) {
+            nullCount += cr.nullCount();
+            totalCount += cr.totalCount();
+            ndv = Math.max(ndv, cr.ndv());
+
+            if (!cr.minValue().isNull()) {
+                if (minValue == null || io.github.xinfra.lab.xdb.expression.DatumComparator.compare(cr.minValue(), minValue) < 0) {
+                    minValue = cr.minValue();
+                }
+            }
+            if (!cr.maxValue().isNull()) {
+                if (maxValue == null || io.github.xinfra.lab.xdb.expression.DatumComparator.compare(cr.maxValue(), maxValue) > 0) {
+                    maxValue = cr.maxValue();
+                }
+            }
+            sampleValues.addAll(cr.sampleValues());
         }
     }
 

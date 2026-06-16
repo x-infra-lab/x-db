@@ -37,6 +37,8 @@ class InfoSchemaHolderTest {
             @Override public List<Long> listTableIds(long dbId) { return List.of(); }
             @Override public long allocAutoIncId(long tableId, int batchSize) { return 0; }
             @Override public long allocGlobalId() { return 0; }
+            @Override public void putTableStats(long tableId, byte[] statsJson) {}
+            @Override public byte[] getTableStats(long tableId) { return null; }
         };
     }
 
@@ -141,6 +143,8 @@ class InfoSchemaHolderTest {
             @Override public List<Long> listTableIds(long dbId) { return List.of(); }
             @Override public long allocAutoIncId(long tableId, int batchSize) { return 0; }
             @Override public long allocGlobalId() { return 0; }
+            @Override public void putTableStats(long tableId, byte[] statsJson) {}
+            @Override public byte[] getTableStats(long tableId) { return null; }
         };
 
         InfoSchemaHolder holder = new InfoSchemaHolder(slowStore);

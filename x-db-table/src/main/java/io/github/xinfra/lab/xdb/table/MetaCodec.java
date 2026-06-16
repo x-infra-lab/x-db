@@ -49,4 +49,8 @@ public final class MetaCodec {
     public static byte[] globalIdKey() {
         return KeyPrefix.GLOBAL_ID_KEY.getBytes(StandardCharsets.UTF_8);
     }
+
+    public static byte[] statsKey(long tableId) {
+        return (KeyPrefix.STATS_PREFIX + tableId).getBytes(StandardCharsets.UTF_8);
+    }
 }

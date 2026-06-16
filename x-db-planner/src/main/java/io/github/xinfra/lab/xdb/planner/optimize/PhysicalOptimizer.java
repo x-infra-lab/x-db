@@ -3,6 +3,7 @@ package io.github.xinfra.lab.xdb.planner.optimize;
 import io.github.xinfra.lab.xdb.expression.Expression;
 import io.github.xinfra.lab.xdb.meta.IndexInfo;
 import io.github.xinfra.lab.xdb.meta.TableInfo;
+import io.github.xinfra.lab.xdb.planner.cost.CostEstimator;
 import io.github.xinfra.lab.xdb.planner.logical.*;
 import io.github.xinfra.lab.xdb.planner.physical.*;
 
@@ -13,6 +14,16 @@ import java.util.List;
 import java.util.Set;
 
 public class PhysicalOptimizer {
+
+    private final CostEstimator costEstimator;
+
+    public PhysicalOptimizer() {
+        this(new CostEstimator());
+    }
+
+    public PhysicalOptimizer(CostEstimator costEstimator) {
+        this.costEstimator = costEstimator;
+    }
 
     public PhysicalPlan optimize(LogicalPlan logicalPlan) {
         return convert(logicalPlan);
@@ -74,16 +85,48 @@ public class PhysicalOptimizer {
 
     private PhysicalPlan convertTableScan(LogicalTableScan scan) {
         TableInfo table = scan.table();
+
+        PhysicalTableScan tableScan = new PhysicalTableScan(table, scan.alias(),
+                scan.outputSchema(), scan.accessConditions());
+        long tsRows = costEstimator.estimateTableScanRows(table, scan.accessConditions());
+        tableScan.setEstimatedRows(tsRows);
+        double bestCost = costEstimator.estimateCost(tableScan);
+        PhysicalPlan bestPlan = tableScan;
+
         List<IndexInfo> indices = table.getIndices();
         if (indices != null && !scan.accessConditions().isEmpty()) {
-            IndexInfo bestIndex = selectBestIndex(table, scan.accessConditions());
-            if (bestIndex != null) {
-                PhysicalIndexScan idxScan = new PhysicalIndexScan(table, bestIndex, scan.alias(),
+            Set<String> conditionColumns = new HashSet<>();
+            for (Expression cond : scan.accessConditions()) {
+                collectConditionColumns(cond, conditionColumns);
+            }
+
+            for (IndexInfo idx : indices) {
+                if (idx.isPrimary()) continue;
+                if (idx.getState() != null &&
+                        idx.getState() != io.github.xinfra.lab.xdb.meta.SchemaState.PUBLIC) continue;
+                if (idx.getColumns().isEmpty()) continue;
+
+                long firstColId = idx.getColumns().get(0).getColumnId();
+                io.github.xinfra.lab.xdb.meta.ColumnInfo firstCol = table.getColumn(firstColId);
+                if (firstCol == null || !conditionColumns.contains(firstCol.getName().toLowerCase())) {
+                    continue;
+                }
+
+                PhysicalIndexScan idxScan = new PhysicalIndexScan(table, idx, scan.alias(),
                         scan.outputSchema(), scan.accessConditions());
-                return new PhysicalIndexLookup(idxScan, table, scan.outputSchema());
+                long idxRows = costEstimator.estimateIndexScanRows(table, idx, scan.accessConditions());
+                idxScan.setEstimatedRows(idxRows);
+
+                PhysicalIndexLookup lookup = new PhysicalIndexLookup(idxScan, table, scan.outputSchema());
+                double idxCost = costEstimator.estimateCost(lookup);
+
+                if (idxCost < bestCost) {
+                    bestPlan = lookup;
+                    bestCost = idxCost;
+                }
             }
         }
-        return new PhysicalTableScan(table, scan.alias(), scan.outputSchema(), scan.accessConditions());
+        return bestPlan;
     }
 
     private PhysicalPlan convertIndexScan(LogicalIndexScan scan) {
@@ -98,43 +141,29 @@ public class PhysicalOptimizer {
     private PhysicalPlan convertJoin(LogicalJoin join) {
         PhysicalPlan left = convert(join.left());
         PhysicalPlan right = convert(join.right());
-        if (left.estimatedRowCount() <= 10000 || right.estimatedRowCount() <= 10000) {
-            PhysicalPlan buildSide;
-            PhysicalPlan probeSide;
-            if (join.joinType() == JoinType.LEFT) {
-                buildSide = right;
-                probeSide = left;
-            } else if (join.joinType() == JoinType.RIGHT) {
-                buildSide = left;
-                probeSide = right;
-            } else {
-                buildSide = left.estimatedRowCount() <= right.estimatedRowCount() ? left : right;
-                probeSide = buildSide == left ? right : left;
-            }
-            return new PhysicalHashJoin(buildSide, probeSide, join.joinType(),
-                    join.condition(), Collections.emptyList(), Collections.emptyList());
-        }
-        return new PhysicalNestedLoopJoin(left, right, join.joinType(), join.condition());
-    }
 
-    private IndexInfo selectBestIndex(TableInfo table, List<Expression> conditions) {
-        if (table.getIndices() == null) return null;
-        Set<String> conditionColumns = new HashSet<>();
-        for (Expression cond : conditions) {
-            collectConditionColumns(cond, conditionColumns);
+        PhysicalPlan buildSide;
+        PhysicalPlan probeSide;
+        if (join.joinType() == JoinType.LEFT) {
+            buildSide = right;
+            probeSide = left;
+        } else if (join.joinType() == JoinType.RIGHT) {
+            buildSide = left;
+            probeSide = right;
+        } else {
+            buildSide = left.estimatedRowCount() <= right.estimatedRowCount() ? left : right;
+            probeSide = buildSide == left ? right : left;
         }
-        for (IndexInfo idx : table.getIndices()) {
-            if (idx.isPrimary()) continue;
-            if (idx.getState() != null &&
-                    idx.getState() != io.github.xinfra.lab.xdb.meta.SchemaState.PUBLIC) continue;
-            if (idx.getColumns().isEmpty()) continue;
-            long firstColId = idx.getColumns().get(0).getColumnId();
-            io.github.xinfra.lab.xdb.meta.ColumnInfo firstCol = table.getColumn(firstColId);
-            if (firstCol != null && conditionColumns.contains(firstCol.getName().toLowerCase())) {
-                return idx;
-            }
-        }
-        return null;
+
+        PhysicalHashJoin hashJoin = new PhysicalHashJoin(buildSide, probeSide, join.joinType(),
+                join.condition(), Collections.emptyList(), Collections.emptyList());
+        PhysicalNestedLoopJoin nlj = new PhysicalNestedLoopJoin(left, right,
+                join.joinType(), join.condition());
+
+        double hashCost = costEstimator.estimateCost(hashJoin);
+        double nljCost = costEstimator.estimateCost(nlj);
+
+        return hashCost <= nljCost ? hashJoin : nlj;
     }
 
     private void collectConditionColumns(Expression expr, Set<String> columns) {

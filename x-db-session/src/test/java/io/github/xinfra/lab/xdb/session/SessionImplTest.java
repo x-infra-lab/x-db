@@ -36,6 +36,8 @@ class SessionImplTest {
             @Override public List<Long> listTableIds(long dbId) { return List.of(); }
             @Override public long allocAutoIncId(long tableId, int batchSize) { return 1; }
             @Override public long allocGlobalId() { return 1; }
+            @Override public void putTableStats(long tableId, byte[] statsJson) {}
+            @Override public byte[] getTableStats(long tableId) { return null; }
         };
     }
 
