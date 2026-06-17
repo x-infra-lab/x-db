@@ -430,7 +430,7 @@ public class SessionImpl implements Session {
                 while (results.hasNext()) {
                     var regionResult = results.next();
                     if (regionResult.error() != null && !regionResult.error().isEmpty()) {
-                        throw new RuntimeException("Analyze region error: " + regionResult.error());
+                        throw XDBException.internal("Analyze region error: " + regionResult.error());
                     }
                     TipbCodec.AnalyzeResult ar = TipbCodec.decodeAnalyzeResult(regionResult.data());
                     totalRows += ar.rowCount();

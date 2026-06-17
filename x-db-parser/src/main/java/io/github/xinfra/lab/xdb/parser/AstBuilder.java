@@ -1,5 +1,6 @@
 package io.github.xinfra.lab.xdb.parser;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.parser.ast.*;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.TerminalNode;
@@ -576,7 +577,7 @@ public class AstBuilder extends MySQLParserBaseVisitor<Object> {
         if (ref instanceof TableRef.JoinTableRef join) {
             return extractTargetTable(join.getLeft());
         }
-        throw new RuntimeException("Cannot determine target table from table reference");
+        throw XDBException.internal("Cannot determine target table from table reference");
     }
 
     // ================================================================

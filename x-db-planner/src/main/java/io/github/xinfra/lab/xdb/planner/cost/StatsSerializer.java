@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.expression.Datum;
 
 import java.io.IOException;
@@ -52,7 +53,7 @@ public final class StatsSerializer {
             root.put("columnStats", columns);
             return MAPPER.writeValueAsBytes(root);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to serialize table statistics", e);
+            throw XDBException.internal("Failed to serialize table statistics", e);
         }
     }
 
@@ -77,7 +78,7 @@ public final class StatsSerializer {
             }
             return stats;
         } catch (IOException e) {
-            throw new RuntimeException("Failed to deserialize table statistics", e);
+            throw XDBException.internal("Failed to deserialize table statistics", e);
         }
     }
 

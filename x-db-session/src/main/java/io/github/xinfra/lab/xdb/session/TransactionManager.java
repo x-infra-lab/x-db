@@ -90,7 +90,7 @@ public class TransactionManager {
             this.active = true;
             log.debug("Transaction started (pessimistic={})", pessimistic);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to begin transaction", e);
+            throw XDBException.internal("Failed to begin transaction", e);
         }
     }
 
@@ -102,7 +102,7 @@ public class TransactionManager {
             committer.commit(currentTxn);
             log.debug("Transaction committed");
         } catch (Exception e) {
-            throw new RuntimeException("Failed to commit transaction", e);
+            throw XDBException.internal("Failed to commit transaction", e);
         } finally {
             reset();
         }
@@ -116,7 +116,7 @@ public class TransactionManager {
             rollbacker.rollback(currentTxn);
             log.debug("Transaction rolled back");
         } catch (Exception e) {
-            throw new RuntimeException("Failed to rollback transaction", e);
+            throw XDBException.internal("Failed to rollback transaction", e);
         } finally {
             reset();
         }

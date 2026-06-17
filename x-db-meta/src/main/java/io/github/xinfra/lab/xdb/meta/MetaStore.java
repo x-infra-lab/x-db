@@ -14,7 +14,6 @@ public interface MetaStore {
     long advanceSchemaVersion();
 
     default void truncateTable(long dbId, long tableId) {
-        dropTable(dbId, tableId);
     }
 
     void createDatabase(DatabaseInfo db);

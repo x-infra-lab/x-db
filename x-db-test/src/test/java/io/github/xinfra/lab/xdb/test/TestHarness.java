@@ -27,6 +27,7 @@ import io.github.xinfra.lab.xdb.table.CopRequestCodec.PartialAggState;
 import io.github.xinfra.lab.xdb.table.KvPairDecoder;
 import io.github.xinfra.lab.xdb.table.RowCodec;
 import io.github.xinfra.lab.xdb.table.TableCodec;
+import io.github.xinfra.lab.xdb.table.TipbCodec;
 import io.github.xinfra.lab.xdb.meta.MetaStore;
 import io.github.xinfra.lab.xdb.meta.TableInfo;
 import io.github.xinfra.lab.xdb.session.InfoSchemaHolder;
@@ -291,7 +292,7 @@ public class TestHarness implements AutoCloseable {
                 byte[] startKey, byte[] endKey, int concurrency) {
             if (requestType != 1) return java.util.Collections.emptyIterator();
 
-            CopRequest copReq = CopRequestCodec.decodeRequest(data);
+            CopRequest copReq = TipbCodec.decodeDAGRequest(data);
             List<TransactionContext.KVPair> kvPairs = txn.scan(startKey, endKey, 100_000);
 
             List<Row> filteredRows = new ArrayList<>();
@@ -324,7 +325,7 @@ public class TestHarness implements AutoCloseable {
                 result.add(new KvPairDecoder.KvPair(pair.key(), pair.value()));
             }
             byte[] kvData = KvPairDecoder.encode(result);
-            return CopRequestCodec.encodeResponse(new CopResponse.FilteredRows(kvData));
+            return TipbCodec.encodeSelectResponse(new CopResponse.FilteredRows(kvData));
         }
 
         private byte[] handleAggregation(List<Row> rows, CopRequest copReq) {
@@ -371,7 +372,7 @@ public class TestHarness implements AutoCloseable {
                     resultGroups.add(new AggGroupResult(keys, states));
                 }
             }
-            return CopRequestCodec.encodeResponse(new CopResponse.AggResult(resultGroups));
+            return TipbCodec.encodeSelectResponse(new CopResponse.AggResult(resultGroups));
         }
 
         private byte[] handleTopN(List<Row> filteredRows,
@@ -412,7 +413,7 @@ public class TestHarness implements AutoCloseable {
                 result.add(new KvPairDecoder.KvPair(pair.key(), pair.value()));
             }
             byte[] kvData = KvPairDecoder.encode(result);
-            return CopRequestCodec.encodeResponse(new CopResponse.FilteredRows(kvData));
+            return TipbCodec.encodeSelectResponse(new CopResponse.FilteredRows(kvData));
         }
 
         private Row decodeRow(byte[] key, byte[] value, CopRequest copReq) {

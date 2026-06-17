@@ -99,4 +99,26 @@ public class XDBException extends RuntimeException {
         return new XDBException(ER_DB_EXISTS, "HY000",
             "Can't create database '" + name + "'; database exists");
     }
+
+    public static XDBException ddlFailed(String detail) {
+        return new XDBException(ER_UNKNOWN_ERROR, "HY000", "DDL failed: " + detail);
+    }
+
+    public static XDBException ddlTimeout(long jobId, long timeoutMs) {
+        return new XDBException(ER_LOCK_WAIT_TIMEOUT, "HY000",
+            String.format("DDL timeout after %dms for job %d", timeoutMs, jobId));
+    }
+
+    public static XDBException ddlCancelled(String detail) {
+        return new XDBException(ER_UNKNOWN_ERROR, "HY000", "DDL cancelled: " + detail);
+    }
+
+    public static XDBException ddlInterrupted() {
+        return new XDBException(ER_UNKNOWN_ERROR, "HY000", "DDL wait interrupted");
+    }
+
+    public static XDBException schemaObjectNotFound(String type, String name, String context) {
+        return new XDBException(ER_UNKNOWN_ERROR, "HY000",
+            type + " not found: " + name + " in " + context);
+    }
 }

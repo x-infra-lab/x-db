@@ -1,5 +1,6 @@
 package io.github.xinfra.lab.xdb.ddl;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.meta.ColumnInfo;
 import io.github.xinfra.lab.xdb.meta.DatabaseInfo;
 import io.github.xinfra.lab.xdb.meta.IndexInfo;
@@ -148,7 +149,7 @@ public class SchemaChangeExecutor {
             // Intermediate step: update table state
             TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
             if (tableInfo == null) {
-                throw new RuntimeException("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
+                throw XDBException.internal("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
             }
             tableInfo.setState(next);
             metaStore.updateTable(job.getDbId(), tableInfo);
@@ -166,7 +167,7 @@ public class SchemaChangeExecutor {
 
         TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
         if (tableInfo == null) {
-            throw new RuntimeException("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
+            throw XDBException.internal("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
         }
 
         ColumnInfo columnInfo = job.getColumnInfo();
@@ -210,7 +211,7 @@ public class SchemaChangeExecutor {
 
         TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
         if (tableInfo == null) {
-            throw new RuntimeException("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
+            throw XDBException.internal("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
         }
 
         ColumnInfo columnInfo = job.getColumnInfo();
@@ -244,7 +245,7 @@ public class SchemaChangeExecutor {
 
         TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
         if (tableInfo == null) {
-            throw new RuntimeException("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
+            throw XDBException.internal("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
         }
 
         IndexInfo indexInfo = job.getIndexInfo();
@@ -293,7 +294,7 @@ public class SchemaChangeExecutor {
 
         TableInfo tableInfo = metaStore.getTable(job.getDbId(), job.getTableId());
         if (tableInfo == null) {
-            throw new RuntimeException("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
+            throw XDBException.internal("Table not found: dbId=" + job.getDbId() + ", tableId=" + job.getTableId());
         }
 
         IndexInfo indexInfo = job.getIndexInfo();
@@ -322,13 +323,40 @@ public class SchemaChangeExecutor {
     }
 
     private void executeTruncateTable(DDLJob job) {
-        // Truncate is handled as a single-step operation:
-        // drop all data but keep the table metadata
-        metaStore.truncateTable(job.getDbId(), job.getTableId());
+        long dbId = job.getDbId();
+        long oldTableId = job.getTableId();
+
+        TableInfo oldTable = metaStore.getTable(dbId, oldTableId);
+        if (oldTable == null) {
+            throw XDBException.internal("Table not found: dbId=" + dbId + ", tableId=" + oldTableId);
+        }
+
+        long newTableId = metaStore.allocGlobalId();
+
+        TableInfo newTable = new TableInfo();
+        newTable.setId(newTableId);
+        newTable.setName(oldTable.getName());
+        newTable.setDbId(oldTable.getDbId());
+        newTable.setState(SchemaState.PUBLIC);
+        newTable.setColumns(oldTable.getColumns());
+        newTable.setIndices(oldTable.getIndices());
+        newTable.setCharset(oldTable.getCharset());
+        newTable.setCollation(oldTable.getCollation());
+        newTable.setComment(oldTable.getComment());
+        newTable.setEngine(oldTable.getEngine());
+        newTable.setMaxColumnId(oldTable.getMaxColumnId());
+        newTable.setMaxIndexId(oldTable.getMaxIndexId());
+        newTable.setAutoIncId(0);
+
+        metaStore.dropTable(dbId, oldTableId);
+        metaStore.createTable(dbId, newTable);
+
         long version = metaStore.advanceSchemaVersion();
         job.setVersion(version);
-        job.setSchemaState(null); // done
-        log.info("Truncated table: dbId={}, tableId={}, version={}", job.getDbId(), job.getTableId(), version);
+        job.setTableId(newTableId);
+        job.setSchemaState(null);
+        log.info("Truncated table: dbId={}, oldTableId={}, newTableId={}, version={}",
+                dbId, oldTableId, newTableId, version);
     }
 
     /**
@@ -476,7 +504,7 @@ public class SchemaChangeExecutor {
                 return;
             }
         }
-        throw new RuntimeException("Column not found: " + columnName + " in table " + tableInfo.getName());
+        throw XDBException.schemaObjectNotFound("Column", columnName, "table " + tableInfo.getName());
     }
 
     private void updateIndexState(TableInfo tableInfo, String indexName, SchemaState state) {
@@ -489,6 +517,6 @@ public class SchemaChangeExecutor {
                 return;
             }
         }
-        throw new RuntimeException("Index not found: " + indexName + " in table " + tableInfo.getName());
+        throw XDBException.schemaObjectNotFound("Index", indexName, "table " + tableInfo.getName());
     }
 }

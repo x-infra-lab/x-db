@@ -38,6 +38,9 @@ class AutoIdAllocatorTest {
             public long allocAutoIncId(long tableId, int batchSize) {
                 return autoInc.getAndAdd(batchSize);
             }
+
+            @Override public void putTableStats(long tableId, byte[] statsJson) {}
+            @Override public byte[] getTableStats(long tableId) { return null; }
         };
     }
 

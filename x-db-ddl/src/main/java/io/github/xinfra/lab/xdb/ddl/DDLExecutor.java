@@ -1,5 +1,6 @@
 package io.github.xinfra.lab.xdb.ddl;
 
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.meta.ColumnInfo;
 import io.github.xinfra.lab.xdb.meta.DatabaseInfo;
 import io.github.xinfra.lab.xdb.meta.IndexInfo;
@@ -128,7 +129,7 @@ public class DDLExecutor {
      *
      * @param job the DDL job to submit
      * @return the completed job
-     * @throws RuntimeException if the job fails or times out
+     * @throws XDBException if the job fails, is cancelled, or times out
      */
     private DDLJob submitAndWait(DDLJob job) {
         jobQueue.enqueue(job);
@@ -145,18 +146,18 @@ public class DDLExecutor {
                 return current;
             }
             if (current.getState() == DDLState.FAILED) {
-                throw new RuntimeException("DDL failed: " + current.getError());
+                throw XDBException.ddlFailed(current.getError());
             }
             if (current.getState() == DDLState.CANCELLED) {
-                throw new RuntimeException("DDL cancelled: " + current.getError());
+                throw XDBException.ddlCancelled(current.getError());
             }
             try {
                 Thread.sleep(DEFAULT_POLL_INTERVAL_MS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("DDL wait interrupted", e);
+                throw XDBException.ddlInterrupted();
             }
         }
-        throw new RuntimeException("DDL timeout after " + waitTimeoutMs + "ms for job " + job.getId());
+        throw XDBException.ddlTimeout(job.getId(), waitTimeoutMs);
     }
 }

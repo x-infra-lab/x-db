@@ -2,6 +2,7 @@ package io.github.xinfra.lab.xdb.ddl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.xinfra.lab.xdb.common.XDBException;
 import io.github.xinfra.lab.xdb.table.MetaCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -184,7 +185,7 @@ public class KVDDLJobQueue implements DDLJobQueue {
         try {
             return objectMapper.writeValueAsBytes(job);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to serialize DDL job: " + job.getId(), e);
+            throw XDBException.internal("Failed to serialize DDL job: " + job.getId(), e);
         }
     }
 
@@ -192,7 +193,7 @@ public class KVDDLJobQueue implements DDLJobQueue {
         try {
             return objectMapper.readValue(data, DDLJob.class);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to deserialize DDL job", e);
+            throw XDBException.internal("Failed to deserialize DDL job", e);
         }
     }
 }

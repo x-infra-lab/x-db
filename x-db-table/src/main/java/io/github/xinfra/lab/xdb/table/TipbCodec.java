@@ -9,6 +9,7 @@ import io.github.xinfra.lab.xdb.expression.CaseWhenExpr;
 import io.github.xinfra.lab.xdb.expression.CastExpr;
 import io.github.xinfra.lab.xdb.expression.ColumnRef;
 import io.github.xinfra.lab.xdb.expression.Constant;
+import io.github.xinfra.lab.xdb.expression.DataType;
 import io.github.xinfra.lab.xdb.expression.Datum;
 import io.github.xinfra.lab.xdb.expression.Expression;
 import io.github.xinfra.lab.xdb.expression.FunctionCallExpr;
@@ -242,6 +243,171 @@ public final class TipbCodec {
         } catch (InvalidProtocolBufferException e) {
             throw new IllegalStateException("Failed to parse AnalyzeResult", e);
         }
+    }
+
+    // --- Tipb.Expr → Expression ---
+
+    public static Expression decodeExpr(Tipb.Expr proto) {
+        return switch (proto.getTp()) {
+            case CONSTANT -> {
+                DataType dt = DataType.values()[proto.getDataType()];
+                Datum val = proto.hasVal() ? decodeDatum(proto.getVal()) : Datum.nil();
+                yield new Constant(val, dt);
+            }
+            case COLUMN_REF -> {
+                String tableName = proto.getTableName().isEmpty() ? null : proto.getTableName();
+                DataType dt = DataType.values()[proto.getDataType()];
+                yield new ColumnRef(tableName, proto.getColumnName(), proto.getColumnIndex(), dt);
+            }
+            case BINARY_OP -> {
+                BinaryOp.Op op = BinaryOp.Op.values()[proto.getOp()];
+                yield new BinaryOp(decodeExpr(proto.getChildren(0)), op, decodeExpr(proto.getChildren(1)));
+            }
+            case UNARY_OP -> {
+                UnaryOp.Op op = UnaryOp.Op.values()[proto.getOp()];
+                yield new UnaryOp(op, decodeExpr(proto.getChildren(0)));
+            }
+            case LIKE -> new LikeExpr(
+                    decodeExpr(proto.getChildren(0)),
+                    decodeExpr(proto.getChildren(1)),
+                    proto.getNot());
+            case IN -> {
+                Expression expr = decodeExpr(proto.getChildren(0));
+                List<Expression> list = new ArrayList<>(proto.getChildrenCount() - 1);
+                for (int i = 1; i < proto.getChildrenCount(); i++) {
+                    list.add(decodeExpr(proto.getChildren(i)));
+                }
+                yield new InExpr(expr, list, proto.getNot());
+            }
+            case BETWEEN -> new BetweenExpr(
+                    decodeExpr(proto.getChildren(0)),
+                    decodeExpr(proto.getChildren(1)),
+                    decodeExpr(proto.getChildren(2)),
+                    proto.getNot());
+            case CAST -> {
+                DataType targetType = DataType.values()[proto.getDataType()];
+                yield new CastExpr(decodeExpr(proto.getChildren(0)), targetType);
+            }
+            case CASE_WHEN -> {
+                int idx = 0;
+                Expression compareExpr = null;
+                if (proto.getOp() == 1) {
+                    compareExpr = decodeExpr(proto.getChildren(idx++));
+                }
+                List<CaseWhenExpr.WhenClause> clauses = new ArrayList<>();
+                int remaining = proto.getChildrenCount() - idx;
+                boolean hasElse = remaining % 2 != 0;
+                int pairCount = remaining / 2;
+                for (int i = 0; i < pairCount; i++) {
+                    clauses.add(new CaseWhenExpr.WhenClause(
+                            decodeExpr(proto.getChildren(idx++)),
+                            decodeExpr(proto.getChildren(idx++))));
+                }
+                Expression elseExpr = hasElse ? decodeExpr(proto.getChildren(idx)) : null;
+                yield new CaseWhenExpr(compareExpr, clauses, elseExpr);
+            }
+            case FUNCTION_CALL -> {
+                List<Expression> args = new ArrayList<>(proto.getChildrenCount());
+                for (int i = 0; i < proto.getChildrenCount(); i++) {
+                    args.add(decodeExpr(proto.getChildren(i)));
+                }
+                yield new FunctionCallExpr(proto.getFuncName(), args);
+            }
+            default -> throw new IllegalArgumentException(
+                    "Unsupported expression type: " + proto.getTp());
+        };
+    }
+
+    // --- DAGRequest bytes → CopRequest ---
+
+    public static CopRequestCodec.CopRequest decodeDAGRequest(byte[] data) {
+        try {
+            Tipb.DAGRequest dag = Tipb.DAGRequest.parseFrom(data);
+
+            long tableId = dag.getTableId();
+
+            List<CopRequestCodec.ColumnDesc> columns = new ArrayList<>(dag.getColumnsCount());
+            for (Tipb.ColumnInfo ci : dag.getColumnsList()) {
+                columns.add(new CopRequestCodec.ColumnDesc(
+                        ci.getColumnId(),
+                        DataType.values()[ci.getDataType()],
+                        ci.getAutoIncrement(),
+                        ci.getOffset()));
+            }
+
+            List<Integer> outputColumnIndices = new ArrayList<>(dag.getOutputColumnIndicesCount());
+            for (int i = 0; i < dag.getOutputColumnIndicesCount(); i++) {
+                outputColumnIndices.add(dag.getOutputColumnIndices(i));
+            }
+
+            List<Expression> conditions = new ArrayList<>(dag.getConditionsCount());
+            for (Tipb.Expr expr : dag.getConditionsList()) {
+                conditions.add(decodeExpr(expr));
+            }
+
+            List<Expression> groupByExprs = new ArrayList<>(dag.getGroupByExprsCount());
+            for (Tipb.Expr expr : dag.getGroupByExprsList()) {
+                groupByExprs.add(decodeExpr(expr));
+            }
+
+            List<CopRequestCodec.AggFuncDesc> aggFuncs = new ArrayList<>(dag.getAggFuncsCount());
+            for (Tipb.AggFuncDesc afd : dag.getAggFuncsList()) {
+                AggFunction.Type type = AggFunction.Type.values()[afd.getAggType()];
+                Expression arg = afd.hasArg() ? decodeExpr(afd.getArg()) : null;
+                aggFuncs.add(new CopRequestCodec.AggFuncDesc(type, afd.getDistinct(), arg));
+            }
+
+            long topNLimit = dag.getTopnLimit();
+            long topNOffset = dag.getTopnOffset();
+
+            List<Expression> orderByExprs = new ArrayList<>(dag.getOrderByCount());
+            List<Boolean> orderByAsc = new ArrayList<>(dag.getOrderByCount());
+            for (Tipb.ByItem bi : dag.getOrderByList()) {
+                orderByExprs.add(decodeExpr(bi.getExpr()));
+                orderByAsc.add(!bi.getDesc());
+            }
+
+            return new CopRequestCodec.CopRequest(
+                    tableId, columns, outputColumnIndices, conditions,
+                    groupByExprs, aggFuncs, topNLimit, topNOffset,
+                    orderByExprs, orderByAsc);
+        } catch (InvalidProtocolBufferException e) {
+            throw new IllegalStateException("Failed to parse DAGRequest", e);
+        }
+    }
+
+    // --- CopResponse → SelectResponse bytes ---
+
+    public static byte[] encodeSelectResponse(CopRequestCodec.CopResponse resp) {
+        Tipb.SelectResponse.Builder b = Tipb.SelectResponse.newBuilder();
+
+        switch (resp) {
+            case CopRequestCodec.CopResponse.FilteredRows fr -> {
+                b.setIsAgg(false);
+                b.setKvPairData(ByteString.copyFrom(fr.kvPairData()));
+            }
+            case CopRequestCodec.CopResponse.AggResult ar -> {
+                b.setIsAgg(true);
+                for (CopRequestCodec.AggGroupResult group : ar.groups()) {
+                    Tipb.AggGroupResult.Builder gb = Tipb.AggGroupResult.newBuilder();
+                    for (Datum key : group.groupKeys()) {
+                        gb.addGroupKeys(encodeDatum(key));
+                    }
+                    for (CopRequestCodec.PartialAggState state : group.partialStates()) {
+                        Tipb.PartialAggState.Builder sb = Tipb.PartialAggState.newBuilder()
+                                .setAggType(state.type().ordinal())
+                                .setDistinct(state.distinct());
+                        for (Datum d : state.state()) {
+                            sb.addState(encodeDatum(d));
+                        }
+                        gb.addPartialStates(sb);
+                    }
+                    b.addAggGroups(gb);
+                }
+            }
+        }
+
+        return b.build().toByteArray();
     }
 
     // --- SelectResponse bytes → CopResponse ---
